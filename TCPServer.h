@@ -11,7 +11,8 @@
 
 class TCPServer {
 public:
-    TCPServer(const std::string& server_ip = "127.0.0.1", int server_port = 32761);
+    //TCPServer(const std::string& server_ip = "127.0.0.1", int server_port = 32760);
+    TCPServer(const std::string& server_ip = "192.168.137.123", int server_port = 32760);
     ~TCPServer();
     void startListening();
     void sendData(const std::string& data);

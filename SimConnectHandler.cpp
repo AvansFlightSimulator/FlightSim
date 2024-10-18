@@ -61,9 +61,11 @@ void CALLBACK MyDispatchProcRD(SIMCONNECT_RECV* pData, DWORD cbData, void* pCont
     static double wind_direction_deg = 0.0; // Variable to hold wind direction
     static double rudder_deflection_deg = 0.0; // Variable to hold rudder deflection
 
-    static const double PITCH_CONSTRAINT = 9;
-    static const double ROLL_CONSTRAINT = 13;
-    static const double YAW_CONSTRAINT = 5;
+
+    //Constraints for maximum attitude
+    static const double PITCH_CONSTRAINT = 5;
+    static const double ROLL_CONSTRAINT = 5;
+    static const double YAW_CONSTRAINT = 0;
 
     switch (pData->dwID) {
     case SIMCONNECT_RECV_ID_SIMOBJECT_DATA: {
@@ -103,12 +105,13 @@ void CALLBACK MyDispatchProcRD(SIMCONNECT_RECV* pData, DWORD cbData, void* pCont
             float base_len = 1156.372420286821;  // Base leg length
 
             for (size_t i = 0; i < 6; i++) {
-                float li = compute_li_length(start_height, 0, 0, pitch_deg, platform_legs[i], base_legs[i]);
+                //Yaw_deg, roll_deg, pitch_deg
+                float li = compute_li_length(start_height, yaw_deg, (roll_deg * -1), pitch_deg, platform_legs[i], base_legs[i]);
                 std::cout << "Leg " << i + 1 << ": " << std::round(li - base_len) << " units\n";
 
                 // Append each computed leg length to the string
-                legLengths[i] = std::round(li - base_len); // Store the computed leg length
-                speeds[i] = 200;
+                legLengths[i] = std::round((li - base_len) + 200); // Store the computed leg length
+                speeds[i] = 50;
             }
 
             nlohmann::json j;

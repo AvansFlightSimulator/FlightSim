@@ -94,6 +94,7 @@ void TCPServer::acceptClient() {
 void TCPServer::sendData(const std::string& data) {
     if (isConnected) {
         send(client_sock, data.c_str(), data.length(), 0);
+        std::cout << data << std::endl;
     }
     else {
         std::cerr << "Cannot send data; no client connected." << std::endl;
