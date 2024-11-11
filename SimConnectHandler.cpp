@@ -65,7 +65,7 @@ void CALLBACK MyDispatchProcRD(SIMCONNECT_RECV* pData, DWORD cbData, void* pCont
     //Constraints for maximum attitude
     static const double PITCH_CONSTRAINT = 5;
     static const double ROLL_CONSTRAINT = 5;
-    static const double YAW_CONSTRAINT = 0;
+    static const double YAW_CONSTRAINT = 3;
 
     switch (pData->dwID) {
     case SIMCONNECT_RECV_ID_SIMOBJECT_DATA: {
