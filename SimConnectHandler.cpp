@@ -38,13 +38,8 @@ vec start_height{ 0, 0, 1079 };  // Starting height of the platform
 std::vector<float> legLengths(6); // To hold the computed leg lengths
 std::vector<float> speeds(6);
 
-
-
-#ifndef M_PI
-#define M_PI 3.14159265358979323846
-#endif
-
-
+const int REFRESH_RATE = 1; //in Hz
+const int SPEED_LIMIT = 400;
 
 // Function to clamp a value between min and max
 double clamp(double value, double min, double max) {
@@ -58,14 +53,14 @@ double clamp(double value, double min, double max) {
 }
 
 void CALLBACK MyDispatchProcRD(SIMCONNECT_RECV* pData, DWORD cbData, void* pContext) {
-    static double wind_direction_deg = 0.0; // Variable to hold wind direction
     static double rudder_deflection_deg = 0.0; // Variable to hold rudder deflection
-
 
     //Constraints for maximum attitude
     static const double PITCH_CONSTRAINT = 5;
     static const double ROLL_CONSTRAINT = 5;
     static const double YAW_CONSTRAINT = 3;
+
+    std::array<float, 6> currentLegLengths = tcpServer.getCurrentPositions();
 
     switch (pData->dwID) {
     case SIMCONNECT_RECV_ID_SIMOBJECT_DATA: {
@@ -103,33 +98,33 @@ void CALLBACK MyDispatchProcRD(SIMCONNECT_RECV* pData, DWORD cbData, void* pCont
 
             // Calculate the leg lengths based on the current orientation
             float base_len = 1156.372420286821;  // Base leg length
+            
+            float time_in_seconds = 1.0f / REFRESH_RATE; // Convert hertz to time in seconds
 
             for (size_t i = 0; i < 6; i++) {
-                //Yaw_deg, roll_deg, pitch_deg
+                // Yaw_deg, roll_deg, pitch_deg
                 float li = compute_li_length(start_height, yaw_deg, (roll_deg * -1), pitch_deg, platform_legs[i], base_legs[i]);
                 std::cout << "Leg " << i + 1 << ": " << std::round(li - base_len) << " units\n";
 
                 // Append each computed leg length to the string
                 legLengths[i] = std::round((li - base_len) + 200); // Store the computed leg length
-                speeds[i] = 50;
+                float legDifference = std::abs(legLengths[i] - currentLegLengths[i]);
+
+                // Calculate speed based on leg length and time, enforce speed limit
+                float raw_speed = std::abs(legDifference / time_in_seconds); // Ensure speed is positive
+                speeds[i] = clamp(raw_speed, 1, SPEED_LIMIT); // Enforce the speed limit between 0 and the defined SPEED_LIMIT
             }
 
-            nlohmann::json j;
+            nlohmann::json data;
 
 
             // Store the computed leg lengths in the JSON object under "positions"
-            j["positions"] = legLengths; // legLengths contains the leg lengths
-            j["speeds"] = speeds;
+            data["positions"] = legLengths; // legLengths contains the leg lengths
+            data["speeds"] = speeds;
 
             // Send the JSON data
-            tcpServer.sendData(j.dump()); // Send the JSON as a string over TCP connection
+            tcpServer.sendData(data.dump()); // Send the JSON as a string over TCP connection
 
-        }
-        // Handle wind data
-        else if (pObjData->dwRequestID == REQUEST_WIND) {
-            WindData* wind = (WindData*)&pObjData->dwData; // Cast to your wind data struct
-            wind_direction_deg = wind->direction; // Update wind direction
-            std::cout << "Wind Direction: " << wind_direction_deg << " degrees\n"; // Optional debug output
         }
         // Handle rudder deflection data
         else if (pObjData->dwRequestID == REQUEST_RUDDER) {
@@ -158,24 +153,17 @@ bool InitializeSimConnect() {
         // Define the data structure we want to receive
         hr = SimConnect_AddToDataDefinition(hSimConnect, DEFINITION_ORIENTATION, "PLANE PITCH DEGREES", "radians");
         hr = SimConnect_AddToDataDefinition(hSimConnect, DEFINITION_ORIENTATION, "PLANE BANK DEGREES", "radians");
-        hr = SimConnect_AddToDataDefinition(hSimConnect, DEFINITION_ORIENTATION, "PLANE HEADING DEGREES TRUE", "radians");
-
-        // Add wind data definition
-        hr = SimConnect_AddToDataDefinition(hSimConnect, DEFINITION_WIND, "WIND DIRECTION", "degrees");
-        hr = SimConnect_AddToDataDefinition(hSimConnect, DEFINITION_WIND, "WIND SPEED", "knots");
 
         // Add rudder deflection data definition
         hr = SimConnect_AddToDataDefinition(hSimConnect, DEFINITION_RUDDER, "RUDDER DEFLECTION", "degrees");
 
         // Request data for orientation, wind, and rudder
-        hr = SimConnect_RequestDataOnSimObject(hSimConnect, REQUEST_ORIENTATION, DEFINITION_ORIENTATION, SIMCONNECT_OBJECT_ID_USER, SIMCONNECT_PERIOD_SIM_FRAME);
-        hr = SimConnect_RequestDataOnSimObject(hSimConnect, REQUEST_WIND, DEFINITION_WIND, SIMCONNECT_OBJECT_ID_USER, SIMCONNECT_PERIOD_SIM_FRAME);
-        hr = SimConnect_RequestDataOnSimObject(hSimConnect, REQUEST_RUDDER, DEFINITION_RUDDER, SIMCONNECT_OBJECT_ID_USER, SIMCONNECT_PERIOD_SIM_FRAME);
+        //hr = SimConnect_RequestDataOnSimObject(hSimConnect, REQUEST_ORIENTATION, DEFINITION_ORIENTATION, SIMCONNECT_OBJECT_ID_USER, SIMCONNECT_PERIOD_SIM_FRAME);
+        //hr = SimConnect_RequestDataOnSimObject(hSimConnect, REQUEST_RUDDER, DEFINITION_RUDDER, SIMCONNECT_OBJECT_ID_USER, SIMCONNECT_PERIOD_SIM_FRAME);
 
         // Request data for orientation, wind, and rudder 1hz
-        //hr = SimConnect_RequestDataOnSimObject(hSimConnect, REQUEST_ORIENTATION, DEFINITION_ORIENTATION, SIMCONNECT_OBJECT_ID_USER, SIMCONNECT_PERIOD_SECOND);
-        //hr = SimConnect_RequestDataOnSimObject(hSimConnect, REQUEST_WIND, DEFINITION_WIND, SIMCONNECT_OBJECT_ID_USER, SIMCONNECT_PERIOD_SECOND);
-        //hr = SimConnect_RequestDataOnSimObject(hSimConnect, REQUEST_RUDDER, DEFINITION_RUDDER, SIMCONNECT_OBJECT_ID_USER, SIMCONNECT_PERIOD_SECOND);
+        hr = SimConnect_RequestDataOnSimObject(hSimConnect, REQUEST_ORIENTATION, DEFINITION_ORIENTATION, SIMCONNECT_OBJECT_ID_USER, SIMCONNECT_PERIOD_SECOND);
+        hr = SimConnect_RequestDataOnSimObject(hSimConnect, REQUEST_RUDDER, DEFINITION_RUDDER, SIMCONNECT_OBJECT_ID_USER, SIMCONNECT_PERIOD_SECOND);
 
         return true;
     }

@@ -1,4 +1,8 @@
 #include "TCPServer.h"
+#include <Mstcpip.h> // For SIO_KEEPALIVE_VALS on Windows
+#include <nlohmann/json.hpp> // Include the nlohmann JSON library
+
+using json = nlohmann::json;  // For convenience
 
 // Constructor initializes the server IP and port, but waits for client connections
 TCPServer::TCPServer(const std::string& server_ip, int server_port)
@@ -67,8 +71,29 @@ void TCPServer::startListening() {
     }
 }
 
+void TCPServer::enableKeepAlive(SOCKET sock, DWORD keepAliveTime, DWORD keepAliveInterval) {
+    // Enable TCP keep-alive
+    BOOL optval = TRUE;
+    if (setsockopt(sock, SOL_SOCKET, SO_KEEPALIVE, (char*)&optval, sizeof(optval)) == SOCKET_ERROR) {
+        std::cerr << "Failed to enable TCP keep-alive: " << WSAGetLastError() << std::endl;
+        return;
+    }
 
-// Private function to accept a client connection
+    // Configure keep-alive parameters
+    struct tcp_keepalive keepAliveSettings;
+    keepAliveSettings.onoff = 1; // Enable keep-alive
+    keepAliveSettings.keepalivetime = keepAliveTime; // Time in milliseconds before sending keep-alive probes
+    keepAliveSettings.keepaliveinterval = keepAliveInterval; // Interval in milliseconds between probes
+
+    DWORD bytesReturned;
+    if (WSAIoctl(sock, SIO_KEEPALIVE_VALS, &keepAliveSettings, sizeof(keepAliveSettings), NULL, 0, &bytesReturned, NULL, NULL) == SOCKET_ERROR) {
+        std::cerr << "Failed to set keep-alive parameters: " << WSAGetLastError() << std::endl;
+    }
+    else {
+        std::cout << "Keep-alive enabled (time: " << keepAliveTime << " ms, interval: " << keepAliveInterval << " ms)." << std::endl;
+    }
+}
+
 void TCPServer::acceptClient() {
     int client_size = sizeof(client_address);
     client_sock = accept(server_sock, (sockaddr*)&client_address, &client_size);
@@ -80,6 +105,9 @@ void TCPServer::acceptClient() {
 
     isConnected = true;
 
+    // Enable keep-alive on the client socket
+    enableKeepAlive(client_sock, 20000, 1000); // 20 seconds idle, 1-second interval
+    
     // Use inet_ntop to convert the client IP address
     char ip_str[INET6_ADDRSTRLEN]; // Enough space for both IPv4 and IPv6
     if (inet_ntop(AF_INET, &client_address.sin_addr, ip_str, sizeof(ip_str))) {
@@ -99,6 +127,50 @@ void TCPServer::sendData(const std::string& data) {
     else {
         std::cerr << "Cannot send data; no client connected." << std::endl;
     }
+}
+
+void TCPServer::receiveData() {
+    char buffer[1024]; // Buffer to hold incoming data
+    int bytesReceived = recv(client_sock, buffer, sizeof(buffer), 0); // Receive data from the client
+    if (bytesReceived == SOCKET_ERROR) {
+        std::cerr << "Recv failed: " << WSAGetLastError() << std::endl;
+    }
+    else if (bytesReceived == 0) {
+        std::cout << "Client disconnected." << std::endl;
+        closeConnection();
+    }
+    else {
+        std::cout << "Received data: " << buffer << std::endl;
+
+        // Parse the received JSON
+        try {
+            json receivedJson = json::parse(buffer);
+
+            // Assuming the JSON has a key "currentPositions" with an array of 6 floats
+            if (receivedJson.contains("currentPositions")) {
+                // Fill the array with the values from the JSON array
+                int index = 0;
+                for (const auto& pos : receivedJson["currentPositions"]) {
+                    currentPositions[index] = pos.get<float>();
+                    std::cout << currentPositions[index] << std::endl;
+                    ++index;
+                }
+            }
+            else {
+                std::cerr << "JSON does not contain 'currentPositions'" << std::endl;
+            }
+        }
+        catch (const json::exception& e) {
+            std::cerr << "Failed to parse JSON: " << e.what() << std::endl;
+        }
+
+        memset(buffer, 0, sizeof(buffer));
+    }
+}
+
+std::array<float, 6> TCPServer::getCurrentPositions() const 
+{
+    return currentPositions;
 }
 
 // Function to close the socket connection
