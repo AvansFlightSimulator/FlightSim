@@ -5,6 +5,7 @@
 #include <nlohmann/json.hpp>
 #include <iostream>
 #include <cmath>  // For M_PI
+#include <thread>
 
 
 #ifndef M_PI
@@ -13,8 +14,17 @@
 
 HANDLE hSimConnect = nullptr;
 
-TCPServer tcpServer;
+std::ofstream logFile;
 
+TCPServer* tcpServer;
+static int counter = 0;
+
+SimConnectHandler::SimConnectHandler(TCPServer* server)
+{
+    tcpServer = server;
+    logFile.open("logs/FlightSim_StewardServer_Log.txt");
+}
+    
 // Base and platform leg positions for computation
 vec base_legs[6] = {
     {177.53, 723.37, 0},
@@ -38,8 +48,8 @@ vec start_height{ 0, 0, 1079 };  // Starting height of the platform
 std::vector<float> legLengths(6); // To hold the computed leg lengths
 std::vector<float> speeds(6);
 
-const int REFRESH_RATE = 1; //in Hz
-const int SPEED_LIMIT = 400;
+const int REFRESH_RATE = 20; //in Hz
+const int SPEED_LIMIT = 300;
 
 // Function to clamp a value between min and max
 double clamp(double value, double min, double max) {
@@ -52,15 +62,26 @@ double clamp(double value, double min, double max) {
     return value;
 }
 
-void CALLBACK MyDispatchProcRD(SIMCONNECT_RECV* pData, DWORD cbData, void* pContext) {
+std::string CheckDigitCount(int value)
+{
+    if (value >= 100)
+        return std::to_string(value);
+    else if (value < 100 && value >= 10)
+        return "0" + std::to_string(value);
+    else
+        return "00" + std::to_string(value);
+}
+
+void CALLBACK SimConnectHandler::MyDispatchProcRD(SIMCONNECT_RECV* pData, DWORD cbData, void* pContext) {
     static double rudder_deflection_deg = 0.0; // Variable to hold rudder deflection
 
     //Constraints for maximum attitude
-    static const double PITCH_CONSTRAINT = 5;
-    static const double ROLL_CONSTRAINT = 5;
+    static const double PITCH_CONSTRAINT = 8;
+    static const double ROLL_CONSTRAINT = 8;
     static const double YAW_CONSTRAINT = 3;
 
-    std::array<float, 6> currentLegLengths = tcpServer.getCurrentPositions();
+    
+
 
     switch (pData->dwID) {
     case SIMCONNECT_RECV_ID_SIMOBJECT_DATA: {
@@ -69,11 +90,13 @@ void CALLBACK MyDispatchProcRD(SIMCONNECT_RECV* pData, DWORD cbData, void* pCont
         // Handle orientation data
         if (pObjData->dwRequestID == REQUEST_ORIENTATION) {
             AircraftOrientation* pS = (AircraftOrientation*)&pObjData->dwData;
+            
+            std::array<float, 6> currentLegLengths = tcpServer->getCurrentPositions();
 
             // Invert pitch and convert radians to degrees
             double pitch_deg = -pS->pitch * (180.0 / M_PI);  // Invert pitch
             double roll_deg = pS->bank * (180.0 / M_PI);
-            double yaw_deg = rudder_deflection_deg; // Assign yaw from rudder deflection
+            double yaw_deg = rudder_deflection_deg * -1; // Assign yaw from rudder deflection
 
             // Store pre-clamp values for logging
             double preclamp_pitch = pitch_deg;
@@ -104,26 +127,62 @@ void CALLBACK MyDispatchProcRD(SIMCONNECT_RECV* pData, DWORD cbData, void* pCont
             for (size_t i = 0; i < 6; i++) {
                 // Yaw_deg, roll_deg, pitch_deg
                 float li = compute_li_length(start_height, yaw_deg, (roll_deg * -1), pitch_deg, platform_legs[i], base_legs[i]);
-                std::cout << "Leg " << i + 1 << ": " << std::round(li - base_len) << " units\n";
+                //std::cout << "Leg " << i + 1 << ": " << std::round(li - base_len) << " units\n";
 
                 // Append each computed leg length to the string
                 legLengths[i] = std::round((li - base_len) + 200); // Store the computed leg length
-                float legDifference = std::abs(legLengths[i] - currentLegLengths[i]);
 
                 // Calculate speed based on leg length and time, enforce speed limit
-                float raw_speed = std::abs(legDifference / time_in_seconds); // Ensure speed is positive
-                speeds[i] = clamp(raw_speed, 1, SPEED_LIMIT); // Enforce the speed limit between 0 and the defined SPEED_LIMIT
+                int calculatedSpeed = std::abs((legLengths[i] - currentLegLengths[i]) / time_in_seconds);
+                float raw_speed = std::abs(calculatedSpeed / time_in_seconds); // Ensure speed is positive
+
+                // Enforce the speed limit
+                if (calculatedSpeed > SPEED_LIMIT) {
+                    speeds[i] = SPEED_LIMIT;
+                }
+                else if (calculatedSpeed <= SPEED_LIMIT && calculatedSpeed > 0)
+                {
+                    speeds[i] = calculatedSpeed;
+                }
+                else if (calculatedSpeed <= 0) {
+                    speeds[i] = 5;
+                }
             }
 
-            nlohmann::json data;
-
-
             // Store the computed leg lengths in the JSON object under "positions"
-            data["positions"] = legLengths; // legLengths contains the leg lengths
-            data["speeds"] = speeds;
+
+            std::string tempSendingData = "{\"positions\" : [";
+
+            tempSendingData += CheckDigitCount(legLengths[0]);
+
+            for (size_t i = 1; i < legLengths.size(); i++)
+                tempSendingData += ", " + CheckDigitCount(legLengths[i]);
+
+            tempSendingData += "], \"speeds\" : [";
+
+            tempSendingData += CheckDigitCount(speeds[0]);
+
+            for (size_t i = 1; i < speeds.size(); i++)
+                tempSendingData += ", " + CheckDigitCount(speeds[i]);
+
+            tempSendingData += "]}";
 
             // Send the JSON data
-            tcpServer.sendData(data.dump()); // Send the JSON as a string over TCP connection
+            tcpServer->sendData(tempSendingData); // Send the JSON as a string over TCP connection
+
+
+            // Logging file
+            logFile << tempSendingData << "\n";
+            
+
+            //if (counter == 1) 
+            //{
+            //    counter = 0;
+            //}
+            //else 
+            //{
+            //    counter++;
+            //}
 
         }
         // Handle rudder deflection data
@@ -136,7 +195,7 @@ void CALLBACK MyDispatchProcRD(SIMCONNECT_RECV* pData, DWORD cbData, void* pCont
 
     case SIMCONNECT_RECV_ID_QUIT:
         std::cout << "Simulator has exited\n";
-        tcpServer.closeConnection(); // Close connection on exit
+        tcpServer->closeConnection(); // Close connection on exit
         break;
 
     default:
@@ -144,7 +203,7 @@ void CALLBACK MyDispatchProcRD(SIMCONNECT_RECV* pData, DWORD cbData, void* pCont
     }
 }
 
-bool InitializeSimConnect() {
+bool SimConnectHandler::InitializeSimConnect() {
     HRESULT hr;
 
     if (SUCCEEDED(SimConnect_Open(&hSimConnect, "Retrieve Aircraft Orientation", nullptr, 0, nullptr, 0))) {
@@ -158,12 +217,12 @@ bool InitializeSimConnect() {
         hr = SimConnect_AddToDataDefinition(hSimConnect, DEFINITION_RUDDER, "RUDDER DEFLECTION", "degrees");
 
         // Request data for orientation, wind, and rudder
-        //hr = SimConnect_RequestDataOnSimObject(hSimConnect, REQUEST_ORIENTATION, DEFINITION_ORIENTATION, SIMCONNECT_OBJECT_ID_USER, SIMCONNECT_PERIOD_SIM_FRAME);
-        //hr = SimConnect_RequestDataOnSimObject(hSimConnect, REQUEST_RUDDER, DEFINITION_RUDDER, SIMCONNECT_OBJECT_ID_USER, SIMCONNECT_PERIOD_SIM_FRAME);
+        hr = SimConnect_RequestDataOnSimObject(hSimConnect, REQUEST_ORIENTATION, DEFINITION_ORIENTATION, SIMCONNECT_OBJECT_ID_USER, SIMCONNECT_PERIOD_SIM_FRAME);
+        hr = SimConnect_RequestDataOnSimObject(hSimConnect, REQUEST_RUDDER, DEFINITION_RUDDER, SIMCONNECT_OBJECT_ID_USER, SIMCONNECT_PERIOD_SIM_FRAME);
 
         // Request data for orientation, wind, and rudder 1hz
-        hr = SimConnect_RequestDataOnSimObject(hSimConnect, REQUEST_ORIENTATION, DEFINITION_ORIENTATION, SIMCONNECT_OBJECT_ID_USER, SIMCONNECT_PERIOD_SECOND);
-        hr = SimConnect_RequestDataOnSimObject(hSimConnect, REQUEST_RUDDER, DEFINITION_RUDDER, SIMCONNECT_OBJECT_ID_USER, SIMCONNECT_PERIOD_SECOND);
+        //hr = SimConnect_RequestDataOnSimObject(hSimConnect, REQUEST_ORIENTATION, DEFINITION_ORIENTATION, SIMCONNECT_OBJECT_ID_USER, SIMCONNECT_PERIOD_SECOND);
+        //hr = SimConnect_RequestDataOnSimObject(hSimConnect, REQUEST_RUDDER, DEFINITION_RUDDER, SIMCONNECT_OBJECT_ID_USER, SIMCONNECT_PERIOD_SECOND);
 
         return true;
     }
@@ -173,7 +232,7 @@ bool InitializeSimConnect() {
     }
 }
 
-void CloseSimConnect() {
+void SimConnectHandler::CloseSimConnect() {
     if (hSimConnect) {
         SimConnect_Close(hSimConnect);
         hSimConnect = nullptr;

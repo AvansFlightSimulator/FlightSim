@@ -105,7 +105,7 @@
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>_DEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
-      <AdditionalIncludeDirectories>C:\CPPLibraries\nlohmann\include;C:\MSFS SDK\SimConnect SDK\include;C:\cpp libraries\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>C:\CPPLibraries\include;C:\MSFS SDK\SimConnect SDK\include;C:\cpp libraries\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
@@ -137,7 +137,6 @@
     <ClCompile Include="TCPServer.cpp" />
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="..\..\Downloads\json.hpp" />
     <ClInclude Include="calculate_legs.h" />
     <ClInclude Include="SimConnectHandler.h" />
     <ClInclude Include="TCPServer.h" />

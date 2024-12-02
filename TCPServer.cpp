@@ -32,8 +32,6 @@ TCPServer::TCPServer(const std::string& server_ip, int server_port)
         closesocket(server_sock);
         return; // Constructor exits early
     }
-
-    startListening();
 }
 
 // Destructor closes the socket
@@ -140,7 +138,7 @@ void TCPServer::receiveData() {
         closeConnection();
     }
     else {
-        std::cout << "Received data: " << buffer << std::endl;
+        //std::cout << "Received data: " << buffer << std::endl;
 
         // Parse the received JSON
         try {
@@ -152,7 +150,7 @@ void TCPServer::receiveData() {
                 int index = 0;
                 for (const auto& pos : receivedJson["currentPositions"]) {
                     currentPositions[index] = pos.get<float>();
-                    std::cout << currentPositions[index] << std::endl;
+                    //std::cout << currentPositions[index] << std::endl;
                     ++index;
                 }
             }

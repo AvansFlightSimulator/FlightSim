@@ -15,6 +15,8 @@ using json = nlohmann::json;  // For convenience
 
 class TCPServer {
 public:
+    bool isConnected;           // Connection status
+
     // Constructor that initializes the server IP and port (default values can be provided)
     TCPServer(const std::string& server_ip = "192.168.137.123", int server_port = 32760);
 
@@ -41,7 +43,6 @@ private:
     SOCKET client_sock;         // Client socket
     sockaddr_in server_address; // Server address
     sockaddr_in client_address; // Client address
-    bool isConnected;           // Connection status
 
     // Vector to store the current positions (6 floats)
     std::array<float, 6> currentPositions;

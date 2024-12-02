@@ -3,18 +3,15 @@
 
 #include <windows.h>
 #include <SimConnect.h>
+#include <iostream>
+#include <fstream>
+#include "TCPServer.h"
 
 // Define a data structure to hold the roll, pitch, and yaw
 struct AircraftOrientation {
     double pitch;   // Pitch angle in radians
     double bank;    // Roll angle in radians (also known as bank)
     double heading; // Heading angle in radians (also known as yaw)
-};
-
-// Define a data structure to hold wind information
-struct WindData {
-    float direction; // Wind direction in degrees
-    float speed;     // Wind speed in knots
 };
 
 struct RudderData {
@@ -24,26 +21,32 @@ struct RudderData {
 // Simulation event IDs
 enum DATA_DEFINE_ID {
     DEFINITION_ORIENTATION,
-    DEFINITION_WIND, // Added wind data definition
     DEFINITION_RUDDER
 };
 
 // Request IDs
 enum DATA_REQUEST_ID {
     REQUEST_ORIENTATION,
-    REQUEST_WIND, // Added wind data request
     REQUEST_RUDDER
 };
 
 extern HANDLE hSimConnect;
 
-// Callback function to handle SimConnect data reception
-void CALLBACK MyDispatchProcRD(SIMCONNECT_RECV* pData, DWORD cbData, void* pContext);
+class SimConnectHandler {
+public:
+    SimConnectHandler(TCPServer* server);
 
-// Function to initialize the connection to SimConnect and request data
-bool InitializeSimConnect();
+    // Callback function to handle SimConnect data reception
+    static void CALLBACK MyDispatchProcRD(SIMCONNECT_RECV* pData, DWORD cbData, void* pContext);
 
-// Function to close the SimConnect connection
-void CloseSimConnect();
+    // Function to initialize the connection to SimConnect and request data
+    bool InitializeSimConnect();
+
+    // Function to close the SimConnect connection
+    void CloseSimConnect();
+private:    
+};
+
+
 
 #endif // SIMCONNECTHANDLER_H
