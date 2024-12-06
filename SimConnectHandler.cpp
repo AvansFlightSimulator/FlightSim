@@ -132,7 +132,10 @@ void CALLBACK SimConnectHandler::MyDispatchProcRD(SIMCONNECT_RECV* pData, DWORD 
                 // Append each computed leg length to the string
                 legLengths[i] = std::round((li - base_len) + 200); // Store the computed leg length
 
-                // Calculate speed based on leg length and time, enforce speed limit
+                // for unity to receive leg lengths
+                dataForUnity[i+3] = li-base_len-988;
+                
+                // Calculate speed based on leg length ad time, enforce speed limit
                 int calculatedSpeed = std::abs((legLengths[i] - currentLegLengths[i]) / time_in_seconds);
                 float raw_speed = std::abs(calculatedSpeed / time_in_seconds); // Ensure speed is positive
 
@@ -148,6 +151,20 @@ void CALLBACK SimConnectHandler::MyDispatchProcRD(SIMCONNECT_RECV* pData, DWORD 
                     speeds[i] = 5;
                 }
             }
+            
+            dataForUnity[0] = roll_deg;
+            dataForUnity[1] = pitch_deg;
+            dataForUnity[2] = yaw_deg;
+            unityConnection.sendDataToUnity = true;
+            
+            // set flag wait_fill_data_for_unity false
+            // if that flag is false set it true
+            // make array with legs + orientation to send unity
+            // set flag to stratsending data
+            // now the unity thread will see green light to send data 
+            // from the created array.
+            // set wait 
+
 
             // Store the computed leg lengths in the JSON object under "positions"
 

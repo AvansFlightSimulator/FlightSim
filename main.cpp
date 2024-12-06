@@ -1,11 +1,16 @@
 #include "TCPServer.h"
 #include "SimConnectHandler.h"
+#include "UnityConnection.h"
 
 #include <thread>
 #include <windows.h>
 #include <iostream>
 
 TCPServer tcpServer;
+
+UnityConnection UnityConnection;
+
+SimConnectHandler handler;
 
 // Message handling function to process window events
 bool ProcessWindowsMessages() {
@@ -33,9 +38,34 @@ void startPositionsThread(std::thread& listeningThread) {
     listeningThread = std::thread(&listeningThreadMethod);
 }
 
+int UnityThread(){
+    // UnityConnection unityConnection;
+    
+    unityConnection.startListening();
+    int x = 0;
+    while (unityConnection.isConnected)
+    {
+        if(unityConnection.sendDataToUnity){
+            // handler.dataForUnity;
+            std::vector legs_vec;
+            for (size_t i = 0; i < 6; i++)
+            {
+                legs_vec.push_back(handler.dataForUnity[i+3])
+            }
+            
+            std::string data = unityConnection.createJson(handler.dataForUnity[0], handler.dataForUnity[1], handler.dataForUnity[2], legs_vec);
+            std::cout << data << std::endl;
+            unityConnection.sendData(data);
+            unityConnection.sendDataToUnity = false;
+        }
+
+    }
+    
+    return 0;
+}
 
 int main() {
-    SimConnectHandler handler = SimConnectHandler(&tcpServer);
+    handler = SimConnectHandler(&tcpServer);
     tcpServer.startListening();
     if (handler.InitializeSimConnect()) {
         std::cout << "Program running. Close the window to exit..." << std::endl;
@@ -46,6 +76,8 @@ int main() {
         // Start the listener thread
         startPositionsThread(listeningThread);
 
+        // run the Unity connection thread
+        std::thread ServerThread(UnityThread);
         // Main loop to keep receiving data until the window is closed
         while (true) {
             SimConnect_CallDispatch(hSimConnect, SimConnectHandler::MyDispatchProcRD, nullptr);
@@ -61,6 +93,10 @@ int main() {
         // Join the listening thread before closing the program to ensure cleanup
         if (listeningThread.joinable()) {
             listeningThread.join();
+        }
+
+         if (UnityConnectionThread.joinable()) {
+            UnityConnectionThread.join();
         }
 
         // Close the connection when done

@@ -6,6 +6,7 @@
 #include <iostream>
 #include <fstream>
 #include "TCPServer.h"
+#include "UnityConnection.h"
 
 // Define a data structure to hold the roll, pitch, and yaw
 struct AircraftOrientation {
@@ -44,6 +45,9 @@ public:
 
     // Function to close the SimConnect connection
     void CloseSimConnect();
+
+    std::vector<float> dataForUnity(9); // To hold data(leglengths + yaw,pitch,roll)
+
 private:    
 };
 
