@@ -37,11 +37,11 @@ class SimConnectHandler {
 public:
     SimConnectHandler();
     SimConnectHandler(TCPServer* server);
-    SetUnityConnection(UnityConnection* uc);
+    void SetUnityConnection(UnityConnection* uc);
     // Callback function to handle SimConnect data reception
     static void CALLBACK MyDispatchProcRD(SIMCONNECT_RECV* pData, DWORD cbData, void* pContext);
 
-    UnityConnection* uc;
+    //UnityConnection* uc;
 
     // Function to initialize the connection to SimConnect and request data
     bool InitializeSimConnect();

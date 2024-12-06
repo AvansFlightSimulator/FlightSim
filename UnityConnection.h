@@ -1,5 +1,6 @@
 #ifndef UNITY_CONNECTION_H
 #define UNITY_CONNECTION_H
+#define _WINSOCK_DEPRECATED_NO_WARNINGS
 
 #include <iostream>
 #include <string>

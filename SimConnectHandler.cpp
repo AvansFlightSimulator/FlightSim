@@ -1,4 +1,5 @@
 #include "TCPServer.h"
+#include "UnityConnection.h"
 #include "SimConnectHandler.h"
 #include "calculate_legs.h"  // Include the calculate_legs header
 #include <windows.h>
@@ -17,11 +18,15 @@ HANDLE hSimConnect = nullptr;
 std::ofstream logFile;
 
 TCPServer* tcpServer;
-//UnityConnection* uc;
+UnityConnection* uc;
 static int counter = 0;
 
 SimConnectHandler::SimConnectHandler() {
 
+}
+
+void SimConnectHandler(UnityConnection* uc_) {
+    uc = uc_;
 }
 
 SimConnectHandler::SimConnectHandler(TCPServer* server)
