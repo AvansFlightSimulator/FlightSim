@@ -35,10 +35,13 @@ extern HANDLE hSimConnect;
 
 class SimConnectHandler {
 public:
+    SimConnectHandler();
     SimConnectHandler(TCPServer* server);
-
+    SetUnityConnection(UnityConnection* uc);
     // Callback function to handle SimConnect data reception
     static void CALLBACK MyDispatchProcRD(SIMCONNECT_RECV* pData, DWORD cbData, void* pContext);
+
+    UnityConnection* uc;
 
     // Function to initialize the connection to SimConnect and request data
     bool InitializeSimConnect();
@@ -46,7 +49,7 @@ public:
     // Function to close the SimConnect connection
     void CloseSimConnect();
 
-    std::vector<float> dataForUnity(9); // To hold data(leglengths + yaw,pitch,roll)
+    static std::array<float, 9> dataForUnity;// To hold data(leglengths + yaw,pitch,roll)
 
 private:    
 };

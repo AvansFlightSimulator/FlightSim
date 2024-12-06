@@ -135,11 +135,13 @@
     <ClCompile Include="main.cpp" />
     <ClCompile Include="SimConnectHandler.cpp" />
     <ClCompile Include="TCPServer.cpp" />
+    <ClCompile Include="UnityConnection.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="calculate_legs.h" />
     <ClInclude Include="SimConnectHandler.h" />
     <ClInclude Include="TCPServer.h" />
+    <ClInclude Include="UnityConnection.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

@@ -17,7 +17,12 @@ HANDLE hSimConnect = nullptr;
 std::ofstream logFile;
 
 TCPServer* tcpServer;
+//UnityConnection* uc;
 static int counter = 0;
+
+SimConnectHandler::SimConnectHandler() {
+
+}
 
 SimConnectHandler::SimConnectHandler(TCPServer* server)
 {
@@ -155,7 +160,7 @@ void CALLBACK SimConnectHandler::MyDispatchProcRD(SIMCONNECT_RECV* pData, DWORD 
             dataForUnity[0] = roll_deg;
             dataForUnity[1] = pitch_deg;
             dataForUnity[2] = yaw_deg;
-            unityConnection.sendDataToUnity = true;
+            uc->sendDataToUnity = true;
             
             // set flag wait_fill_data_for_unity false
             // if that flag is false set it true

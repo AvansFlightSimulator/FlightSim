@@ -8,6 +8,8 @@
 #include <ws2tcpip.h>
 #include <vector>
 #include <iomanip> // for std::fixed and std::setprecision
+#include <sstream> 
+#include <Mstcpip.h> // For SIO_KEEPALIVE_VALS on Windows
 
 // #include <nlohmann/json.hpp> // Include the nlohmann JSON library
 

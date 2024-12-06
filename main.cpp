@@ -8,7 +8,7 @@
 
 TCPServer tcpServer;
 
-UnityConnection UnityConnection;
+UnityConnection unityConnection;
 
 SimConnectHandler handler;
 
@@ -47,10 +47,10 @@ int UnityThread(){
     {
         if(unityConnection.sendDataToUnity){
             // handler.dataForUnity;
-            std::vector legs_vec;
+            std::vector<float> legs_vec;
             for (size_t i = 0; i < 6; i++)
             {
-                legs_vec.push_back(handler.dataForUnity[i+3])
+                legs_vec.push_back(handler.dataForUnity[i + 3]);
             }
             
             std::string data = unityConnection.createJson(handler.dataForUnity[0], handler.dataForUnity[1], handler.dataForUnity[2], legs_vec);
@@ -66,6 +66,7 @@ int UnityThread(){
 
 int main() {
     handler = SimConnectHandler(&tcpServer);
+    handler.SetUnityConnection(&unityConnection);
     tcpServer.startListening();
     if (handler.InitializeSimConnect()) {
         std::cout << "Program running. Close the window to exit..." << std::endl;
@@ -77,7 +78,7 @@ int main() {
         startPositionsThread(listeningThread);
 
         // run the Unity connection thread
-        std::thread ServerThread(UnityThread);
+        std::thread UnityConnectionThread(UnityThread);
         // Main loop to keep receiving data until the window is closed
         while (true) {
             SimConnect_CallDispatch(hSimConnect, SimConnectHandler::MyDispatchProcRD, nullptr);
