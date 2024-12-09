@@ -72,6 +72,31 @@ std::string CheckDigitCount(int value)
         return "00" + std::to_string(value);
 }
 
+std::string SimConnectHandler::CreateUnityJson(float yaw, float roll, float pitch, const float legs[6]) {
+    std::ostringstream oss;
+
+    oss << std::fixed << std::setprecision(2) // Set precision for float
+        << "{\n"
+        << "    \"orientation\": {\n"
+        << "        \"yaw\": " << yaw << ",\n"
+        << "        \"roll\": " << roll << ",\n"
+        << "        \"pitch\": " << pitch << "\n"
+        << "    },\n"
+        << "    \"legs\": [";
+
+    for (size_t i = 0; i < legs.size(); ++i) {
+        oss << legs[i];
+        if (i < legs.size() - 1) {
+            oss << ", ";
+        }
+    }
+
+    oss << "]\n"
+        << "}";
+
+    return oss.str();
+}
+
 void CALLBACK SimConnectHandler::MyDispatchProcRD(SIMCONNECT_RECV* pData, DWORD cbData, void* pContext) {
     static double rudder_deflection_deg = 0.0; // Variable to hold rudder deflection
 
@@ -92,6 +117,7 @@ void CALLBACK SimConnectHandler::MyDispatchProcRD(SIMCONNECT_RECV* pData, DWORD 
             AircraftOrientation* pS = (AircraftOrientation*)&pObjData->dwData;
             
             std::array<float, 6> currentLegLengths = tcpServer->getCurrentPositions();
+            std::array<float, 6> dataForUnity;
 
             // Invert pitch and convert radians to degrees
             double pitch_deg = -pS->pitch * (180.0 / M_PI);  // Invert pitch
@@ -132,6 +158,8 @@ void CALLBACK SimConnectHandler::MyDispatchProcRD(SIMCONNECT_RECV* pData, DWORD 
                 // Append each computed leg length to the string
                 legLengths[i] = std::round((li - base_len) + 200); // Store the computed leg length
 
+                // for unity to receive leg lengths
+                dataForUnity[i] = li-base_len-988;
                 // Calculate speed based on leg length and time, enforce speed limit
                 int calculatedSpeed = std::abs((legLengths[i] - currentLegLengths[i]) / time_in_seconds);
                 float raw_speed = std::abs(calculatedSpeed / time_in_seconds); // Ensure speed is positive
@@ -167,9 +195,14 @@ void CALLBACK SimConnectHandler::MyDispatchProcRD(SIMCONNECT_RECV* pData, DWORD 
 
             tempSendingData += "]}";
 
-            // Send the JSON data
-            tcpServer->sendData(tempSendingData); // Send the JSON as a string over TCP connection
-
+            if(connectToUnity){
+                std::string sendData = "";
+                sendData = SimConnectHandler::CreateUnityJson(yaw_deg, roll_deg, pitch_deg, dataForUnity);
+                tcpServer->sendData(sendData);
+            }else{
+                // Send the JSON data
+                tcpServer->sendData(tempSendingData); // Send the JSON as a string over TCP connection
+            }
 
             // Logging file
             logFile << tempSendingData << "\n";

@@ -5,6 +5,8 @@
 #include <SimConnect.h>
 #include <iostream>
 #include <fstream>
+#include <string>
+#include <sstream>
 #include "TCPServer.h"
 
 // Define a data structure to hold the roll, pitch, and yaw
@@ -44,6 +46,9 @@ public:
 
     // Function to close the SimConnect connection
     void CloseSimConnect();
+
+    bool connectToUnity = false;
+    std::string CreateUnityJson(float yaw, float roll, float pitch, const float legs[6]);
 private:    
 };
 
