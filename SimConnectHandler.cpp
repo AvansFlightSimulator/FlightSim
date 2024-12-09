@@ -72,7 +72,8 @@ std::string CheckDigitCount(int value)
         return "00" + std::to_string(value);
 }
 
-std::string SimConnectHandler::CreateUnityJson(float yaw, float roll, float pitch, const float legs[6]) {
+
+std::string CreateUnityJson(float yaw, float roll, float pitch, const const std::array<float, 6> legs) {
     std::ostringstream oss;
 
     oss << std::fixed << std::setprecision(2) // Set precision for float
@@ -84,9 +85,9 @@ std::string SimConnectHandler::CreateUnityJson(float yaw, float roll, float pitc
         << "    },\n"
         << "    \"legs\": [";
 
-    for (size_t i = 0; i < legs.size(); ++i) {
+    for (size_t i = 0; i < 6; ++i) {
         oss << legs[i];
-        if (i < legs.size() - 1) {
+        if (i < 6 - 1) {
             oss << ", ";
         }
     }
@@ -133,6 +134,7 @@ void CALLBACK SimConnectHandler::MyDispatchProcRD(SIMCONNECT_RECV* pData, DWORD 
             pitch_deg = clamp(pitch_deg, -PITCH_CONSTRAINT, PITCH_CONSTRAINT);
             roll_deg = clamp(roll_deg, -ROLL_CONSTRAINT, ROLL_CONSTRAINT);
             yaw_deg = clamp(yaw_deg, -YAW_CONSTRAINT, YAW_CONSTRAINT);
+
 
             // Log warnings if the values are adjusted
             if (preclamp_pitch != pitch_deg) {
@@ -195,14 +197,11 @@ void CALLBACK SimConnectHandler::MyDispatchProcRD(SIMCONNECT_RECV* pData, DWORD 
 
             tempSendingData += "]}";
 
-            if(connectToUnity){
-                std::string sendData = "";
-                sendData = SimConnectHandler::CreateUnityJson(yaw_deg, roll_deg, pitch_deg, dataForUnity);
-                tcpServer->sendData(sendData);
-            }else{
-                // Send the JSON data
-                tcpServer->sendData(tempSendingData); // Send the JSON as a string over TCP connection
-            }
+
+            std::string sendData = "";
+            sendData = CreateUnityJson(yaw_deg, roll_deg, pitch_deg, dataForUnity);
+            tcpServer->sendData(sendData);
+        
 
             // Logging file
             logFile << tempSendingData << "\n";

@@ -47,9 +47,8 @@ public:
     // Function to close the SimConnect connection
     void CloseSimConnect();
 
-    bool connectToUnity = false;
-    std::string CreateUnityJson(float yaw, float roll, float pitch, const float legs[6]);
 private:    
+
 };
 
 

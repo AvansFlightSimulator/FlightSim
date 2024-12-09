@@ -36,14 +36,7 @@ void startPositionsThread(std::thread& listeningThread) {
 
 int main() {
     SimConnectHandler handler = SimConnectHandler(&tcpServer);
-    char inp; 
-    std::cout << "Do you want to connect to unity? (y or n)";
-    std::cin >> inp;
-    if(inp == 'y'){
-        std::cout << "Connecting to Unity :D!";
-        handler.connectToUnity = true;
-    }
-    
+   
     tcpServer.startListening();
     if (handler.InitializeSimConnect()) {
         std::cout << "Program running. Close the window to exit..." << std::endl;
