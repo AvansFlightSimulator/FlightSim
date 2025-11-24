@@ -20,6 +20,9 @@ public:
     // Constructor that initializes the server IP and port (default values can be provided)
     TCPServer(const std::string& server_ip = "192.168.137.123", int server_port = 32760);
 
+    // Localhost for simulator
+    //TCPServer(const std::string& server_ip = "127.0.0.1", int server_port = 32760);
+    //  4844
     // Destructor to clean up resources
     ~TCPServer();
 

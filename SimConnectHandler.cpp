@@ -1,4 +1,4 @@
-#include "TCPServer.h"
+﻿#include "TCPServer.h"
 #include "SimConnectHandler.h"
 #include "calculate_legs.h"  // Include the calculate_legs header
 #include <windows.h>
@@ -6,7 +6,10 @@
 #include <iostream>
 #include <cmath>  // For M_PI
 #include <thread>
+#include <vector>  
+#include <cstdio>   // [CHANGED] voor std::snprintf
 
+#include "BuildMode.h" // [CHANGED] modus-schakelaar
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -24,7 +27,7 @@ SimConnectHandler::SimConnectHandler(TCPServer* server)
     tcpServer = server;
     logFile.open("logs/FlightSim_StewardServer_Log.txt");
 }
-    
+
 // Base and platform leg positions for computation
 vec base_legs[6] = {
     {177.53, 723.37, 0},
@@ -72,16 +75,56 @@ std::string CheckDigitCount(int value)
         return "00" + std::to_string(value);
 }
 
+// ===== [CHANGED] helpers voor payload-opbouw (Unity/PLC) =====
+static inline std::string pad3(int v) {
+    if (v < 0) v = 0; if (v > 999) v = 999;
+    char buf[4]{};
+    std::snprintf(buf, sizeof(buf), "%03d", v);
+    return std::string(buf);
+}
+
+static std::string buildUnityPayload(double yaw_deg, double roll_deg, double pitch_deg,
+    const std::vector<float>& legLengths,
+    const std::vector<float>& speeds) {
+    std::vector<int> pos(6), spd(6);
+    for (int i = 0; i < 6; ++i) {
+        pos[i] = static_cast<int>(std::lround(legLengths[i]));
+        spd[i] = static_cast<int>(std::lround(speeds[i]));
+    }
+    nlohmann::json j;
+    j["orientation"] = { {"yaw", yaw_deg}, {"roll", roll_deg}, {"pitch", pitch_deg} };
+    j["legs"] = pos;
+    j["positions"] = pos;
+    j["speeds"] = spd;
+    return j.dump();
+}
+
+static std::string buildPlcPayload(const std::vector<float>& legLengths,
+    const std::vector<float>& speeds) {
+    std::string s = "{\"positions\":[";
+    for (int i = 0; i < 6; ++i) {
+        if (i) s += ",";
+        const int v = static_cast<int>(std::lround(legLengths[i]));
+        s += (PLC_VALUES_ARE_STRINGS ? ("\"" + pad3(v) + "\"") : std::to_string(v));
+    }
+    s += "],\"speeds\":[";
+    for (int i = 0; i < 6; ++i) {
+        if (i) s += ",";
+        const int v = static_cast<int>(std::lround(speeds[i]));
+        s += (PLC_VALUES_ARE_STRINGS ? ("\"" + pad3(v) + "\"") : std::to_string(v));
+    }
+    s += "]}";
+    return s;
+}
+// ===== [CHANGED] einde helpers =====
+
 void CALLBACK SimConnectHandler::MyDispatchProcRD(SIMCONNECT_RECV* pData, DWORD cbData, void* pContext) {
     static double rudder_deflection_deg = 0.0; // Variable to hold rudder deflection
 
     //Constraints for maximum attitude
-    static const double PITCH_CONSTRAINT = 8;
-    static const double ROLL_CONSTRAINT = 8;
-    static const double YAW_CONSTRAINT = 3;
-
-    
-
+    static const double PITCH_CONSTRAINT = 30;
+    static const double ROLL_CONSTRAINT = 30;
+    static const double YAW_CONSTRAINT = 30;
 
     switch (pData->dwID) {
     case SIMCONNECT_RECV_ID_SIMOBJECT_DATA: {
@@ -90,7 +133,7 @@ void CALLBACK SimConnectHandler::MyDispatchProcRD(SIMCONNECT_RECV* pData, DWORD 
         // Handle orientation data
         if (pObjData->dwRequestID == REQUEST_ORIENTATION) {
             AircraftOrientation* pS = (AircraftOrientation*)&pObjData->dwData;
-            
+
             std::array<float, 6> currentLegLengths = tcpServer->getCurrentPositions();
 
             // Invert pitch and convert radians to degrees
@@ -121,14 +164,12 @@ void CALLBACK SimConnectHandler::MyDispatchProcRD(SIMCONNECT_RECV* pData, DWORD 
 
             // Calculate the leg lengths based on the current orientation
             float base_len = 1156.372420286821;  // Base leg length
-            
+
             float time_in_seconds = 1.0f / REFRESH_RATE; // Convert hertz to time in seconds
 
             for (size_t i = 0; i < 6; i++) {
                 // Yaw_deg, roll_deg, pitch_deg
                 float li = compute_li_length(start_height, yaw_deg, (roll_deg * -1), pitch_deg, platform_legs[i], base_legs[i]);
-                //std::cout << "Leg " << i + 1 << ": " << std::round(li - base_len) << " units\n";
-
                 // Append each computed leg length to the string
                 legLengths[i] = std::round((li - base_len) + 200); // Store the computed leg length
 
@@ -149,41 +190,17 @@ void CALLBACK SimConnectHandler::MyDispatchProcRD(SIMCONNECT_RECV* pData, DWORD 
                 }
             }
 
-            // Store the computed leg lengths in the JSON object under "positions"
+            // ===== [CHANGED] build & send payload per modus =====
+            std::string payload;
+#ifdef TARGET_PLC
+            payload = buildPlcPayload(legLengths, speeds);
+#else
+            payload = buildUnityPayload(yaw_deg, roll_deg, pitch_deg, legLengths, speeds);
+#endif
 
-            std::string tempSendingData = "{\"positions\" : [";
-
-            tempSendingData += CheckDigitCount(legLengths[0]);
-
-            for (size_t i = 1; i < legLengths.size(); i++)
-                tempSendingData += ", " + CheckDigitCount(legLengths[i]);
-
-            tempSendingData += "], \"speeds\" : [";
-
-            tempSendingData += CheckDigitCount(speeds[0]);
-
-            for (size_t i = 1; i < speeds.size(); i++)
-                tempSendingData += ", " + CheckDigitCount(speeds[i]);
-
-            tempSendingData += "]}";
-
-            // Send the JSON data
-            tcpServer->sendData(tempSendingData); // Send the JSON as a string over TCP connection
-
-
-            // Logging file
-            logFile << tempSendingData << "\n";
-            
-
-            //if (counter == 1) 
-            //{
-            //    counter = 0;
-            //}
-            //else 
-            //{
-            //    counter++;
-            //}
-
+            tcpServer->sendData(payload);   // sendData voegt terminator toe
+            logFile << payload << "\n";
+            // ===== [CHANGED] einde =====
         }
         // Handle rudder deflection data
         else if (pObjData->dwRequestID == REQUEST_RUDDER) {

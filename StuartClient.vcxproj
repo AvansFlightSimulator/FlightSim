@@ -137,6 +137,7 @@
     <ClCompile Include="TCPServer.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="BuildMode.h" />
     <ClInclude Include="calculate_legs.h" />
     <ClInclude Include="SimConnectHandler.h" />
     <ClInclude Include="TCPServer.h" />

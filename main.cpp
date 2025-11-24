@@ -5,7 +5,14 @@
 #include <windows.h>
 #include <iostream>
 
-TCPServer tcpServer;
+#include "BuildMode.h"  // [CHANGED] modus-schakelaar toevoegen
+
+// [CHANGED] instantiate TCPServer o.b.v. BuildMode
+#ifdef TARGET_PLC
+TCPServer tcpServer(BIND_IP_PLC, PORT_PLC);
+#else
+TCPServer tcpServer(BIND_IP_UNITY, PORT_UNITY);
+#endif
 
 // Message handling function to process window events
 bool ProcessWindowsMessages() {
@@ -33,13 +40,12 @@ void startPositionsThread(std::thread& listeningThread) {
     listeningThread = std::thread(&listeningThreadMethod);
 }
 
-
 int main() {
     SimConnectHandler handler = SimConnectHandler(&tcpServer);
     tcpServer.startListening();
     if (handler.InitializeSimConnect()) {
         std::cout << "Program running. Close the window to exit..." << std::endl;
-        
+
         // Declare the listener thread
         std::thread listeningThread;
 

@@ -117,15 +117,29 @@ void TCPServer::acceptClient() {
 }
 
 // Function to send data to the client
+
 void TCPServer::sendData(const std::string& data) {
     if (isConnected) {
-        send(client_sock, data.c_str(), data.length(), 0);
+        std::string framed = data + "\n"; // scheiding voor de Unity-client
+        send(client_sock, framed.c_str(),
+            static_cast<int>(framed.length()), 0);
         std::cout << data << std::endl;
     }
     else {
         std::cerr << "Cannot send data; no client connected." << std::endl;
     }
 }
+//void TCPServer::sendData(const std::string& data) {
+//    if (isConnected) {
+//        std::string framed = data + "\n"; //AANGEPAST
+//        send(client_sock, framed.c_str(), (int)framed.length(), 0);
+//        //send(client_sock, data.c_str(), data.length(), 0);
+//        std::cout << data << std::endl;
+//    }
+//    else {
+//        std::cerr << "Cannot send data; no client connected." << std::endl;
+//    }
+//}
 
 void TCPServer::receiveData() {
     char buffer[1024]; // Buffer to hold incoming data
