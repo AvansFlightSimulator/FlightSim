@@ -39,20 +39,26 @@ vec base_legs[6] = {
 };
 
 vec platform_legs[6] = {
-    {537.69, 515.43, 0},
-    {-537.69, 515.43, 0},
-    {-715.23, 207.94, 0},
-    {-177.53, -723.37, 0},
-    {177.53, -723.37, 0},
-    {715.23, 207.94, 0}
+    {360.59, 346.0, 0},
+    {-360.59, 346.0, 0},
+    {-480.12, 139.59, 0},
+    {-119.17, -485.59, 0},
+    {119.17, -485.59, 0},
+    {480.12, 139.59, 0}
 };
 
 vec start_height{ 0, 0, 1079 };  // Starting height of the platform
 std::vector<float> legLengths(6); // To hold the computed leg lengths
 std::vector<float> speeds(6);
 
-const int REFRESH_RATE = 20; //in Hz
-const int SPEED_LIMIT = 300;
+const float REFRESH_RATE = 20.0f;     // in Hz
+const float SPEED_LIMIT = 500.0f;     // absolute hard cap naar PLC (eventueel lager kiezen)
+const float MIN_SPEED = 2.0f;       // minimale snelheid zodat hij niet “doodvalt”
+
+// Max positieverschil dat we per seconde mogen willen (in dezelfde units als legLengths)
+const float MAX_STEP_PER_SEC = 150.0f;   // tuning: kleiner = smoother, minder kans op overspeed
+const float POSITION_DEADZONE = .0f;   // kleiner dan dit → behandelen als stilstand
+
 
 // Function to clamp a value between min and max
 double clamp(double value, double min, double max) {
@@ -151,6 +157,12 @@ void CALLBACK SimConnectHandler::MyDispatchProcRD(SIMCONNECT_RECV* pData, DWORD 
             roll_deg = clamp(roll_deg, -ROLL_CONSTRAINT, ROLL_CONSTRAINT);
             yaw_deg = clamp(yaw_deg, -YAW_CONSTRAINT, YAW_CONSTRAINT);
 
+            std::cout << "Current actuator positions: ";
+            for (float v : currentLegLengths) {
+                std::cout << v << " ";
+            }
+            std::cout << std::endl;
+           
             // Log warnings if the values are adjusted
             if (preclamp_pitch != pitch_deg) {
                 std::cout << "Warning: Pitch adjusted to stay within limits: " << pitch_deg << " degrees\n";
@@ -165,9 +177,9 @@ void CALLBACK SimConnectHandler::MyDispatchProcRD(SIMCONNECT_RECV* pData, DWORD 
             // Calculate the leg lengths based on the current orientation
             float base_len = 1156.372420286821;  // Base leg length
 
-            float time_in_seconds = 1.0f / REFRESH_RATE; // Convert hertz to time in seconds
+            //float time_in_seconds = 1.0f / REFRESH_RATE; // Convert hertz to time in seconds
 
-            for (size_t i = 0; i < 6; i++) {
+            /*for (size_t i = 0; i < 6; i++) {
                 // Yaw_deg, roll_deg, pitch_deg
                 float li = compute_li_length(start_height, yaw_deg, (roll_deg * -1), pitch_deg, platform_legs[i], base_legs[i]);
                 // Append each computed leg length to the string
@@ -188,6 +200,49 @@ void CALLBACK SimConnectHandler::MyDispatchProcRD(SIMCONNECT_RECV* pData, DWORD 
                 else if (calculatedSpeed <= 0) {
                     speeds[i] = 5;
                 }
+            }
+            */
+            float time_in_seconds = 1.0f / REFRESH_RATE; // 20 Hz → 0.05 s
+
+            for (size_t i = 0; i < 6; i++) {
+                // 1. Bereken “ideale” cilinderlengte uit de geometrie
+                float li = compute_li_length(start_height, yaw_deg, (roll_deg * -1), pitch_deg, platform_legs[i], base_legs[i]);
+                float desiredLength = std::round((li - base_len) + 200);  // oude legLengths[i]-logica
+
+                // 2. Gebruik de teruggekoppelde positie als startpunt
+                float currentLength = currentLegLengths[i];
+
+                // 3. Begrens hoeveel we per cycle mogen veranderen (acceleration limiter)
+                float delta = desiredLength - currentLength;
+                float maxStep = MAX_STEP_PER_SEC * time_in_seconds;  // max verplaatsing in deze cycle
+
+                if (delta > maxStep)       delta = maxStep;
+                else if (delta < -maxStep) delta = -maxStep;
+
+                // Nieuwe targetpositie = huidige positie + begrensde stap
+                float limitedTarget = currentLength + delta;
+                legLengths[i] = limitedTarget;
+
+                // 4. Bepaal afstand die we in deze cycle willen afleggen
+                float stepDistance = std::fabs(delta);
+
+                // 5. Deadzone: als we bijna op positie zitten, stuur minimale snelheid
+                float speed;
+                if (stepDistance < POSITION_DEADZONE) {
+                    speed = MIN_SPEED;
+                }
+                else {
+                    // Bepaal gewenste snelheid op basis van afstand per tijd
+                    float requestedSpeed = stepDistance / time_in_seconds; // units per seconde
+
+                    // Begrens de snelheid
+                    if (requestedSpeed > SPEED_LIMIT)   requestedSpeed = SPEED_LIMIT;
+                    if (requestedSpeed < MIN_SPEED)     requestedSpeed = MIN_SPEED;
+
+                    speed = requestedSpeed;
+                }
+
+                speeds[i] = speed;
             }
 
             // ===== [CHANGED] build & send payload per modus =====
