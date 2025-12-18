@@ -59,6 +59,9 @@ const float MIN_SPEED = 2.0f;       // minimale snelheid zodat hij niet “doodv
 const float MAX_STEP_PER_SEC = 400.0f;   // tuning: kleiner = smoother, minder kans op overspeed
 const float POSITION_DEADZONE = .0f;   // kleiner dan dit → behandelen als stilstand
 
+// [NEW] Timestamp voor logging
+std::chrono::steady_clock::time_point startTime = std::chrono::steady_clock::now();
+
 
 // Function to clamp a value between min and max
 double clamp(double value, double min, double max) {
@@ -254,7 +257,11 @@ void CALLBACK SimConnectHandler::MyDispatchProcRD(SIMCONNECT_RECV* pData, DWORD 
 #endif
 
             tcpServer->sendData(payload);   // sendData voegt terminator toe
-            logFile << payload << "\n";
+            
+            // [NEW] Log met timestamp
+            auto now = std::chrono::steady_clock::now();
+            auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - startTime).count();
+            logFile << "[" << elapsed << "ms] SEND: " << payload << "\n";
             // ===== [CHANGED] einde =====
         }
         // Handle rudder deflection data

@@ -1,7 +1,7 @@
 // BuildMode.h
 #pragma once
 
-// ==== KIES PRECIES ииN DOEL ====
+// ==== KIES PRECIES О©╫О©╫N DOEL ====
  //#define TARGET_UNITY
  #define TARGET_PLC
 

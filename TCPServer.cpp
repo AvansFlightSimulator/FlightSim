@@ -1,4 +1,11 @@
 #include "TCPServer.h"
+#include <mutex>    // [NEW] For std::mutex
+#include <chrono>   // [NEW] For timestamps
+#include <fstream>  // [NEW] For logFile
+
+// [NEW] Extern declarations voor logging (defined in SimConnectHandler.cpp)
+extern std::chrono::steady_clock::time_point startTime;
+extern std::ofstream logFile;
 #include <Mstcpip.h> // For SIO_KEEPALIVE_VALS on Windows
 #include <nlohmann/json.hpp> // Include the nlohmann JSON library
 
@@ -157,6 +164,11 @@ void TCPServer::receiveData() {
         // Parse the received JSON
         try {
             json receivedJson = json::parse(buffer);
+
+            // [NEW] Log ontvangen data met timestamp
+            auto now = std::chrono::steady_clock::now();
+            auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - startTime).count();
+            logFile << "[" << elapsed << "ms] RECV: " << buffer << "\n";
 
             // Assuming the JSON has a key "currentPositions" with an array of 6 floats
             if (receivedJson.contains("currentPositions")) {
