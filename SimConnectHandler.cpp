@@ -56,7 +56,7 @@ const float SPEED_LIMIT = 500.0f;     // absolute hard cap naar PLC (eventueel l
 const float MIN_SPEED = 2.0f;       // minimale snelheid zodat hij niet “doodvalt”
 
 // Max positieverschil dat we per seconde mogen willen (in dezelfde units als legLengths)
-const float MAX_STEP_PER_SEC = 150.0f;   // tuning: kleiner = smoother, minder kans op overspeed
+const float MAX_STEP_PER_SEC = 400.0f;   // tuning: kleiner = smoother, minder kans op overspeed
 const float POSITION_DEADZONE = .0f;   // kleiner dan dit → behandelen als stilstand
 
 
