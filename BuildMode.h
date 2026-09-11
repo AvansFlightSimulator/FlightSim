@@ -2,8 +2,8 @@
 #pragma once
 
 // ==== KIES PRECIES ��N DOEL ====
- //#define TARGET_UNITY
- #define TARGET_PLC
+//#define TARGET_UNITY
+#define TARGET_PLC
 
 #if defined(TARGET_PLC) && defined(TARGET_UNITY)
 #error "Define only ONE of TARGET_PLC or TARGET_UNITY"

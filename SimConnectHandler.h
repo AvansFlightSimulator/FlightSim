@@ -12,6 +12,7 @@ struct AircraftOrientation {
     double pitch;   // Pitch angle in radians
     double bank;    // Roll angle in radians (also known as bank)
     double heading; // Heading angle in radians (also known as yaw)
+
 };
 
 struct RudderData {
