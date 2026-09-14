@@ -75,6 +75,7 @@
     <ClCompile>
       <WarningLevel>Level3</WarningLevel>
       <SDLCheck>true</SDLCheck>
+      <LanguageStandard>stdcpp14</LanguageStandard>
       <PreprocessorDefinitions>WIN32;_DEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
     </ClCompile>
@@ -89,6 +90,7 @@
       <FunctionLevelLinking>true</FunctionLevelLinking>
       <IntrinsicFunctions>true</IntrinsicFunctions>
       <SDLCheck>true</SDLCheck>
+      <LanguageStandard>stdcpp14</LanguageStandard>
       <PreprocessorDefinitions>WIN32;NDEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
     </ClCompile>
@@ -103,6 +105,7 @@
     <ClCompile>
       <WarningLevel>Level3</WarningLevel>
       <SDLCheck>true</SDLCheck>
+      <LanguageStandard>stdcpp14</LanguageStandard>
       <PreprocessorDefinitions>_DEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <AdditionalIncludeDirectories>C:\CPPLibraries\include;C:\MSFS SDK\SimConnect SDK\include;C:\cpp libraries\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
@@ -120,6 +123,7 @@
       <FunctionLevelLinking>true</FunctionLevelLinking>
       <IntrinsicFunctions>true</IntrinsicFunctions>
       <SDLCheck>true</SDLCheck>
+      <LanguageStandard>stdcpp14</LanguageStandard>
       <PreprocessorDefinitions>NDEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
     </ClCompile>
@@ -132,13 +136,19 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="calculate_legs.cpp" />
+    <ClCompile Include="DashboardModel.cpp" />
+    <ClCompile Include="HmiWindow.cpp" />
     <ClCompile Include="main.cpp" />
+    <ClCompile Include="ProtocolLogger.cpp" />
     <ClCompile Include="SimConnectHandler.cpp" />
     <ClCompile Include="TCPServer.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="BuildMode.h" />
     <ClInclude Include="calculate_legs.h" />
+    <ClInclude Include="DashboardModel.h" />
+    <ClInclude Include="HmiWindow.h" />
+    <ClInclude Include="ProtocolLogger.h" />
     <ClInclude Include="SimConnectHandler.h" />
     <ClInclude Include="TCPServer.h" />
   </ItemGroup>

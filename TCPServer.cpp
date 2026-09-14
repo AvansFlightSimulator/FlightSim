@@ -1,212 +1,403 @@
 #include "TCPServer.h"
-#include <mutex>    // [NEW] For std::mutex
-#include <chrono>   // [NEW] For timestamps
-#include <fstream>  // [NEW] For logFile
 
-// [NEW] Extern declarations voor logging (defined in SimConnectHandler.cpp)
-extern std::chrono::steady_clock::time_point startTime;
-extern std::ofstream logFile;
-#include <Mstcpip.h> // For SIO_KEEPALIVE_VALS on Windows
-#include <nlohmann/json.hpp> // Include the nlohmann JSON library
+#include "DashboardModel.h"
+#include "ProtocolLogger.h"
 
-using json = nlohmann::json;  // For convenience
+#include <Mstcpip.h>
+#include <iostream>
+#include <nlohmann/json.hpp>
+#include <sstream>
 
-// Constructor initializes the server IP and port, but waits for client connections
-TCPServer::TCPServer(const std::string& server_ip, int server_port)
-    : server_sock(INVALID_SOCKET), client_sock(INVALID_SOCKET), isConnected(false) {
-    // Initialize Winsock
+namespace {
+constexpr std::size_t MaximumBufferedMessageSize = 64 * 1024;
+
+void AddSocketError(DashboardModel* dashboard, const std::string& message, int errorCode) {
+    if (!dashboard) {
+        return;
+    }
+    std::ostringstream event;
+    event << message << " (Winsock " << errorCode << ')';
+    dashboard->AddEvent(event.str(), DashboardEventLevel::Error);
+}
+}
+
+constexpr std::size_t TCPServer::ActuatorCount;
+
+TCPServer::TCPServer(const std::string& serverIp, int serverPort, DashboardModel* dashboard)
+    : serverSocket_(INVALID_SOCKET), clientSocket_(INVALID_SOCKET), dashboard_(dashboard) {
     WSADATA wsaData;
     if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) {
         std::cerr << "WSAStartup failed: " << WSAGetLastError() << std::endl;
-        return; // Constructor exits early
+        if (dashboard_) {
+            dashboard_->AddEvent("Winsock startup failed", DashboardEventLevel::Error);
+        }
+        return;
     }
+    winsockStarted_ = true;
 
-    // Create server socket
-    server_sock = socket(AF_INET, SOCK_STREAM, 0);
-    if (server_sock == INVALID_SOCKET) {
+    serverSocket_ = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if (serverSocket_ == INVALID_SOCKET) {
         std::cerr << "Socket creation failed: " << WSAGetLastError() << std::endl;
-        return; // Constructor exits early
+        if (dashboard_) {
+            dashboard_->AddEvent("TCP socket creation failed", DashboardEventLevel::Error);
+        }
+        return;
     }
 
-    // Set up the server address structure
-    server_address.sin_family = AF_INET;
-    server_address.sin_port = htons(server_port);
-    inet_pton(AF_INET, server_ip.c_str(), &server_address.sin_addr);
+    serverAddress_.sin_family = AF_INET;
+    serverAddress_.sin_port = htons(static_cast<u_short>(serverPort));
+    if (inet_pton(AF_INET, serverIp.c_str(), &serverAddress_.sin_addr) != 1) {
+        std::cerr << "Invalid server address: " << serverIp << std::endl;
+        if (dashboard_) {
+            dashboard_->AddEvent("Invalid TCP bind address", DashboardEventLevel::Error);
+        }
+        closesocket(serverSocket_);
+        serverSocket_ = INVALID_SOCKET;
+        return;
+    }
 
-    // Bind the socket
-    if (bind(server_sock, reinterpret_cast<sockaddr*>(&server_address), sizeof(server_address)) == SOCKET_ERROR) {
+    if (bind(serverSocket_, reinterpret_cast<sockaddr*>(&serverAddress_), sizeof(serverAddress_)) == SOCKET_ERROR) {
         std::cerr << "Bind failed: " << WSAGetLastError() << std::endl;
-        closesocket(server_sock);
-        return; // Constructor exits early
+        if (dashboard_) {
+            dashboard_->AddEvent("Unable to bind the TCP endpoint", DashboardEventLevel::Error);
+        }
+        closesocket(serverSocket_);
+        serverSocket_ = INVALID_SOCKET;
     }
 }
 
-// Destructor closes the socket
 TCPServer::~TCPServer() {
     closeConnection();
-    WSACleanup();
+    if (winsockStarted_) {
+        WSACleanup();
+    }
 }
 
-// Start listening for incoming client connections
-void TCPServer::startListening() {
-    std::cout << "Server listening for connections..." << std::endl;
-    if (listen(server_sock, SOMAXCONN) == SOCKET_ERROR) {
-        std::cerr << "Listen failed: " << WSAGetLastError() << std::endl;
-        return;
+bool TCPServer::startListening() {
+    SOCKET listeningSocket = INVALID_SOCKET;
+    {
+        std::lock_guard<std::mutex> lock(connectionMutex_);
+        listeningSocket = serverSocket_;
     }
 
-    while (true) {
-        int client_size = sizeof(client_address);
-        client_sock = accept(server_sock, (sockaddr*)&client_address, &client_size);
-        if (client_sock == INVALID_SOCKET) {
+    if (shuttingDown_ || listeningSocket == INVALID_SOCKET) {
+        return false;
+    }
+
+    if (!listeningStarted_) {
+        if (listen(listeningSocket, SOMAXCONN) == SOCKET_ERROR) {
+            std::cerr << "Listen failed: " << WSAGetLastError() << std::endl;
+            if (dashboard_) {
+                dashboard_->SetTcpListening(false);
+                dashboard_->AddEvent("TCP listener failed", DashboardEventLevel::Error);
+            }
+            return false;
+        }
+        listeningStarted_ = true;
+        if (dashboard_) {
+            dashboard_->SetTcpListening(true);
+            dashboard_->AddEvent("TCP endpoint is listening");
+        }
+    }
+
+    std::cout << "[TCP] Waiting for a client..." << std::endl;
+    int clientSize = sizeof(clientAddress_);
+    const SOCKET acceptedSocket = accept(
+        listeningSocket,
+        reinterpret_cast<sockaddr*>(&clientAddress_),
+        &clientSize);
+
+    if (acceptedSocket == INVALID_SOCKET) {
+        if (!shuttingDown_) {
             std::cerr << "Client accept failed: " << WSAGetLastError() << std::endl;
-            continue;
+            AddSocketError(dashboard_, "Client accept failed", WSAGetLastError());
+        }
+        return false;
+    }
+
+    bool rejectConnection = false;
+    {
+        std::lock_guard<std::mutex> lock(connectionMutex_);
+        if (shuttingDown_) {
+            rejectConnection = true;
         }
         else {
-            isConnected = true;
-            char ip_str[INET6_ADDRSTRLEN];
-            if (inet_ntop(AF_INET, &client_address.sin_addr, ip_str, sizeof(ip_str))) {
-                std::cout << "Client connected from: " << ip_str << ":" << ntohs(client_address.sin_port) << std::endl;
-            }
-            else {
-                std::cerr << "Failed to convert client IP address: " << WSAGetLastError() << std::endl;
-            }
-            break;
+            clientSocket_ = acceptedSocket;
+            connected_ = true;
+            hasPositionFeedback_ = false;
         }
     }
-}
-
-void TCPServer::enableKeepAlive(SOCKET sock, DWORD keepAliveTime, DWORD keepAliveInterval) {
-    // Enable TCP keep-alive
-    BOOL optval = TRUE;
-    if (setsockopt(sock, SOL_SOCKET, SO_KEEPALIVE, (char*)&optval, sizeof(optval)) == SOCKET_ERROR) {
-        std::cerr << "Failed to enable TCP keep-alive: " << WSAGetLastError() << std::endl;
-        return;
+    if (rejectConnection) {
+        shutdown(acceptedSocket, SD_BOTH);
+        closesocket(acceptedSocket);
+        return false;
     }
 
-    // Configure keep-alive parameters
-    struct tcp_keepalive keepAliveSettings;
-    keepAliveSettings.onoff = 1; // Enable keep-alive
-    keepAliveSettings.keepalivetime = keepAliveTime; // Time in milliseconds before sending keep-alive probes
-    keepAliveSettings.keepaliveinterval = keepAliveInterval; // Interval in milliseconds between probes
-
-    DWORD bytesReturned;
-    if (WSAIoctl(sock, SIO_KEEPALIVE_VALS, &keepAliveSettings, sizeof(keepAliveSettings), NULL, 0, &bytesReturned, NULL, NULL) == SOCKET_ERROR) {
-        std::cerr << "Failed to set keep-alive parameters: " << WSAGetLastError() << std::endl;
-    }
-    else {
-        std::cout << "Keep-alive enabled (time: " << keepAliveTime << " ms, interval: " << keepAliveInterval << " ms)." << std::endl;
-    }
-}
-
-void TCPServer::acceptClient() {
-    int client_size = sizeof(client_address);
-    client_sock = accept(server_sock, (sockaddr*)&client_address, &client_size);
-    if (client_sock == INVALID_SOCKET) {
-        std::cerr << "Client accept failed: " << WSAGetLastError() << std::endl;
-        closesocket(server_sock);
-        return;
+    receiveBuffer_.clear();
+    enableKeepAlive(acceptedSocket, 20000, 1000);
+    if (dashboard_) {
+        dashboard_->SetClientConnected(true);
     }
 
-    isConnected = true;
-
-    // Enable keep-alive on the client socket
-    enableKeepAlive(client_sock, 20000, 1000); // 20 seconds idle, 1-second interval
-    
-    // Use inet_ntop to convert the client IP address
-    char ip_str[INET6_ADDRSTRLEN]; // Enough space for both IPv4 and IPv6
-    if (inet_ntop(AF_INET, &client_address.sin_addr, ip_str, sizeof(ip_str))) {
-        std::cout << "Client connected from: " << ip_str << ":" << ntohs(client_address.sin_port) << std::endl;
+    char ipString[INET_ADDRSTRLEN]{};
+    if (inet_ntop(AF_INET, &clientAddress_.sin_addr, ipString, sizeof(ipString))) {
+        std::cout << "[TCP] Connected: " << ipString << ':' << ntohs(clientAddress_.sin_port) << std::endl;
+        if (dashboard_) {
+            dashboard_->AddEvent(std::string("Controller connected from ") + ipString);
+        }
     }
     else {
         std::cerr << "Failed to convert client IP address: " << WSAGetLastError() << std::endl;
+        AddSocketError(dashboard_, "Unable to display the client address", WSAGetLastError());
+    }
+
+    return true;
+}
+
+void TCPServer::enableKeepAlive(SOCKET socket, DWORD keepAliveTime, DWORD keepAliveInterval) const {
+    BOOL enabled = TRUE;
+    if (setsockopt(socket, SOL_SOCKET, SO_KEEPALIVE, reinterpret_cast<const char*>(&enabled), sizeof(enabled)) == SOCKET_ERROR) {
+        std::cerr << "Failed to enable TCP keep-alive: " << WSAGetLastError() << std::endl;
+        AddSocketError(dashboard_, "TCP keep-alive could not be enabled", WSAGetLastError());
+        return;
+    }
+
+    tcp_keepalive settings{};
+    settings.onoff = 1;
+    settings.keepalivetime = keepAliveTime;
+    settings.keepaliveinterval = keepAliveInterval;
+
+    DWORD bytesReturned = 0;
+    if (WSAIoctl(
+        socket,
+        SIO_KEEPALIVE_VALS,
+        &settings,
+        sizeof(settings),
+        nullptr,
+        0,
+        &bytesReturned,
+        nullptr,
+        nullptr) == SOCKET_ERROR) {
+        std::cerr << "Failed to configure TCP keep-alive: " << WSAGetLastError() << std::endl;
+        AddSocketError(dashboard_, "TCP keep-alive setup failed", WSAGetLastError());
     }
 }
 
-// Function to send data to the client
+bool TCPServer::sendData(const std::string& data) {
+    if (!connected_) {
+        return false;
+    }
 
-void TCPServer::sendData(const std::string& data) {
-    if (isConnected) {
-        std::string framed = data + "\n"; // scheiding voor de Unity-client
-        send(client_sock, framed.c_str(),
-            static_cast<int>(framed.length()), 0);
-        std::cout << data << std::endl;
+    const std::string framedMessage = data + '\n';
+    bool sendFailed = false;
+
+    {
+        std::lock_guard<std::mutex> sendLock(sendMutex_);
+
+        SOCKET socket = INVALID_SOCKET;
+        {
+            std::lock_guard<std::mutex> connectionLock(connectionMutex_);
+            socket = clientSocket_;
+        }
+
+        if (socket == INVALID_SOCKET) {
+            return false;
+        }
+
+        std::size_t sentBytes = 0;
+        while (socket != INVALID_SOCKET && sentBytes < framedMessage.size()) {
+            const int result = send(
+                socket,
+                framedMessage.data() + sentBytes,
+                static_cast<int>(framedMessage.size() - sentBytes),
+                0);
+            if (result == SOCKET_ERROR || result == 0) {
+                sendFailed = true;
+                break;
+            }
+            sentBytes += static_cast<std::size_t>(result);
+        }
     }
-    else {
-        std::cerr << "Cannot send data; no client connected." << std::endl;
+
+    if (sendFailed) {
+        std::cerr << "Send failed: " << WSAGetLastError() << std::endl;
+        AddSocketError(dashboard_, "Command send failed", WSAGetLastError());
+        closeClientConnection();
+        return false;
     }
+
+    return true;
 }
-//void TCPServer::sendData(const std::string& data) {
-//    if (isConnected) {
-//        std::string framed = data + "\n"; //AANGEPAST
-//        send(client_sock, framed.c_str(), (int)framed.length(), 0);
-//        //send(client_sock, data.c_str(), data.length(), 0);
-//        std::cout << data << std::endl;
-//    }
-//    else {
-//        std::cerr << "Cannot send data; no client connected." << std::endl;
-//    }
-//}
 
-void TCPServer::receiveData() {
-    char buffer[1024]; // Buffer to hold incoming data
-    int bytesReceived = recv(client_sock, buffer, sizeof(buffer), 0); // Receive data from the client
+bool TCPServer::receiveData() {
+    SOCKET socket = INVALID_SOCKET;
+    {
+        std::lock_guard<std::mutex> lock(connectionMutex_);
+        socket = clientSocket_;
+    }
+    if (socket == INVALID_SOCKET) {
+        return false;
+    }
+
+    char buffer[4096];
+    const int bytesReceived = recv(socket, buffer, sizeof(buffer), 0);
     if (bytesReceived == SOCKET_ERROR) {
-        std::cerr << "Recv failed: " << WSAGetLastError() << std::endl;
+        if (!shuttingDown_) {
+            std::cerr << "Receive failed: " << WSAGetLastError() << std::endl;
+            AddSocketError(dashboard_, "Position receive failed", WSAGetLastError());
+        }
+        closeClientConnection();
+        return false;
     }
-    else if (bytesReceived == 0) {
-        std::cout << "Client disconnected." << std::endl;
-        closeConnection();
+    if (bytesReceived == 0) {
+        std::cout << "[TCP] Client disconnected." << std::endl;
+        closeClientConnection();
+        return false;
     }
-    else {
-        //std::cout << "Received data: " << buffer << std::endl;
 
-        // Parse the received JSON
-        try {
-            json receivedJson = json::parse(buffer);
+    receiveBuffer_.append(buffer, static_cast<std::size_t>(bytesReceived));
 
-            // [NEW] Log ontvangen data met timestamp
-            auto now = std::chrono::steady_clock::now();
-            auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - startTime).count();
-            logFile << "[" << elapsed << "ms] RECV: " << buffer << "\n";
+    std::size_t delimiter = receiveBuffer_.find('\n');
+    while (delimiter != std::string::npos) {
+        std::string message = receiveBuffer_.substr(0, delimiter);
+        receiveBuffer_.erase(0, delimiter + 1);
+        if (!message.empty() && message.back() == '\r') {
+            message.pop_back();
+        }
+        if (!message.empty()) {
+            processMessage(message);
+        }
+        delimiter = receiveBuffer_.find('\n');
+    }
 
-            // Assuming the JSON has a key "currentPositions" with an array of 6 floats
-            if (receivedJson.contains("currentPositions")) {
-                // Fill the array with the values from the JSON array
-                int index = 0;
-                for (const auto& pos : receivedJson["currentPositions"]) {
-                    currentPositions[index] = pos.get<float>();
-                    //std::cout << currentPositions[index] << std::endl;
-                    ++index;
+    // Backward compatibility for clients that send one complete JSON object
+    // without a newline. Fragmented objects stay buffered until complete.
+    if (!receiveBuffer_.empty()) {
+        const nlohmann::json candidate = nlohmann::json::parse(receiveBuffer_, nullptr, false);
+        if (!candidate.is_discarded()) {
+            processMessage(receiveBuffer_);
+            receiveBuffer_.clear();
+        }
+    }
+
+    if (receiveBuffer_.size() > MaximumBufferedMessageSize) {
+        std::cerr << "Incoming message exceeded 64 KiB and was discarded." << std::endl;
+        if (dashboard_) {
+            dashboard_->AddEvent("Oversized feedback message discarded", DashboardEventLevel::Warning);
+        }
+        receiveBuffer_.clear();
+    }
+
+    return true;
+}
+
+void TCPServer::processMessage(const std::string& message) {
+    try {
+        const nlohmann::json received = nlohmann::json::parse(message);
+        const auto positionsIterator = received.find("currentPositions");
+        if (positionsIterator == received.end() || !positionsIterator->is_array()
+            || positionsIterator->size() != ActuatorCount) {
+            std::cerr << "Feedback must contain exactly six 'currentPositions' values." << std::endl;
+            if (dashboard_) {
+                dashboard_->AddEvent("Feedback rejected: expected six positions", DashboardEventLevel::Warning);
+            }
+            return;
+        }
+
+        std::array<float, ActuatorCount> updatedPositions{};
+        for (std::size_t index = 0; index < ActuatorCount; ++index) {
+            if (!(*positionsIterator)[index].is_number()) {
+                std::cerr << "Every 'currentPositions' value must be numeric." << std::endl;
+                if (dashboard_) {
+                    dashboard_->AddEvent("Feedback rejected: position is not numeric", DashboardEventLevel::Warning);
                 }
+                return;
             }
-            else {
-                std::cerr << "JSON does not contain 'currentPositions'" << std::endl;
-            }
-        }
-        catch (const json::exception& e) {
-            std::cerr << "Failed to parse JSON: " << e.what() << std::endl;
+            updatedPositions[index] = (*positionsIterator)[index].get<float>();
         }
 
-        memset(buffer, 0, sizeof(buffer));
+        {
+            std::lock_guard<std::mutex> lock(positionsMutex_);
+            currentPositions_ = updatedPositions;
+        }
+        if (dashboard_) {
+            dashboard_->UpdateFeedback(updatedPositions);
+        }
+        const bool firstFeedback = !hasPositionFeedback_.exchange(true);
+        if (firstFeedback) {
+            std::cout << "[TCP] Position feedback received; actuator output enabled." << std::endl;
+            if (dashboard_) {
+                dashboard_->AddEvent("Position feedback valid; output enabled");
+            }
+        }
+        LogProtocolMessage("RECV", message);
+    }
+    catch (const nlohmann::json::exception& exception) {
+        std::cerr << "Failed to parse feedback JSON: " << exception.what() << std::endl;
+        if (dashboard_) {
+            dashboard_->AddEvent("Feedback JSON could not be parsed", DashboardEventLevel::Warning);
+        }
     }
 }
 
-std::array<float, 6> TCPServer::getCurrentPositions() const 
-{
-    return currentPositions;
+bool TCPServer::isConnected() const noexcept {
+    return connected_;
 }
 
-// Function to close the socket connection
+bool TCPServer::hasPositionFeedback() const noexcept {
+    return hasPositionFeedback_;
+}
+
+std::array<float, TCPServer::ActuatorCount> TCPServer::getCurrentPositions() const {
+    std::lock_guard<std::mutex> lock(positionsMutex_);
+    return currentPositions_;
+}
+
+void TCPServer::closeClientConnection() {
+    SOCKET socket = INVALID_SOCKET;
+    bool wasConnected = false;
+    {
+        std::lock_guard<std::mutex> connectionLock(connectionMutex_);
+        socket = clientSocket_;
+        clientSocket_ = INVALID_SOCKET;
+        wasConnected = connected_;
+        connected_ = false;
+        hasPositionFeedback_ = false;
+    }
+
+    if (dashboard_) {
+        dashboard_->SetClientConnected(false);
+        if (wasConnected) {
+            dashboard_->AddEvent("Controller disconnected", DashboardEventLevel::Warning);
+        }
+    }
+
+    if (socket != INVALID_SOCKET) {
+        // Interrupt a blocking send/recv before waiting for the send lock.
+        shutdown(socket, SD_BOTH);
+        std::lock_guard<std::mutex> sendLock(sendMutex_);
+        closesocket(socket);
+    }
+}
+
 void TCPServer::closeConnection() {
-    if (client_sock != INVALID_SOCKET) {
-        closesocket(client_sock);
-        client_sock = INVALID_SOCKET;
-        isConnected = false;
-        std::cout << "Disconnected from client." << std::endl;
+    if (shuttingDown_.exchange(true)) {
+        return;
     }
-    if (server_sock != INVALID_SOCKET) {
-        closesocket(server_sock);
-        server_sock = INVALID_SOCKET;
+
+    closeClientConnection();
+
+    SOCKET serverSocket = INVALID_SOCKET;
+    {
+        std::lock_guard<std::mutex> lock(connectionMutex_);
+        serverSocket = serverSocket_;
+        serverSocket_ = INVALID_SOCKET;
+    }
+
+    if (serverSocket != INVALID_SOCKET) {
+        closesocket(serverSocket);
+    }
+    if (dashboard_) {
+        dashboard_->SetTcpListening(false);
     }
 }

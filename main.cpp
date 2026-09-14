@@ -1,143 +1,159 @@
-#include "TCPServer.h"
+#include "BuildMode.h"
+#include "DashboardModel.h"
+#include "HmiWindow.h"
+#include "ProtocolLogger.h"
 #include "SimConnectHandler.h"
+#include "TCPServer.h"
 
-#include <thread>
-#include <mutex>
-#include <chrono>
-#include <vector>
 #include <windows.h>
+
+#include <atomic>
+#include <chrono>
+#include <functional>
 #include <iostream>
+#include <string>
+#include <thread>
 
-#include "BuildMode.h"  // [CHANGED] modus-schakelaar toevoegen
+namespace {
+constexpr auto OutputInterval = std::chrono::milliseconds(50);
+constexpr auto SimConnectRetryInterval = std::chrono::seconds(5);
 
-// [CHANGED] instantiate TCPServer o.b.v. BuildMode
-#ifdef TARGET_PLC
-TCPServer tcpServer(BIND_IP_PLC, PORT_PLC);
-#else
-TCPServer tcpServer(BIND_IP_UNITY, PORT_UNITY);
-#endif
+void PrintStartupBanner() {
+    std::cout
+        << "========================================\n"
+        << " Flight Simulator Motion Bridge\n"
+        << "----------------------------------------\n"
+        << " Target     : " << ACTIVE_TARGET_NAME << '\n'
+        << " Endpoint   : " << ACTIVE_BIND_IP << ':' << ACTIVE_PORT << '\n'
+        << " Actuators  : " << TCPServer::ActuatorCount << '\n'
+        << " Output rate: 20 Hz\n"
+        << "========================================\n";
+}
 
-// [NEW] Shared state voor 20Hz output thread
-std::mutex dataMutex;  // Mutex voor thread-safe data sharing
-std::vector<float> sharedLegLengths(6, 0.0f);  // Laatste berekende leg lengths
-std::vector<float> sharedSpeeds(6, 0.0f);      // Laatste berekende speeds
-std::string sharedPayload = "";                // Laatste gebouwde payload (voor Unity mode)
-bool shouldStop = false;                        // Stop signal voor threads
-
-// Message handling function to process window events
 bool ProcessWindowsMessages() {
-    MSG msg;
-    while (PeekMessage(&msg, nullptr, 0, 0, PM_REMOVE)) {
-        if (msg.message == WM_QUIT || msg.message == WM_CLOSE) {
-            return false;  // Close the program if WM_QUIT or WM_CLOSE is received
+    MSG message;
+    while (PeekMessage(&message, nullptr, 0, 0, PM_REMOVE)) {
+        if (message.message == WM_QUIT) {
+            return false;
         }
-        TranslateMessage(&msg);
-        DispatchMessage(&msg);
+        TranslateMessage(&message);
+        DispatchMessage(&message);
     }
-    return true;  // Continue running
+    return true;
 }
 
-void listeningThreadMethod() {
-    while (true) {
-        if (!tcpServer.isConnected) {
-            break;  // Break if not connected
-        }
-        tcpServer.receiveData();
-    }
-}
-
-void startPositionsThread(std::thread& listeningThread) {
-    listeningThread = std::thread(&listeningThreadMethod);
-}
-
-// [NEW] 20Hz Output thread - stuurt data naar PLC op exacte 20Hz
-void outputThreadMethod() {
-    using namespace std::chrono;
-    
-    const auto interval = milliseconds(50);  // 20Hz = 50ms interval
-    auto nextWakeup = steady_clock::now();
-    
-    // Timing verificatie variabelen
-    int cycleCounter = 0;
-    auto lastLogTime = steady_clock::now();
-    
-    std::cout << "[OUTPUT THREAD] Started 20Hz output thread" << std::endl;
-    
-    while (!shouldStop) {
-        // Check if connected
-        if (!tcpServer.isConnected) {
-            std::this_thread::sleep_for(milliseconds(100));
-            continue;
-        }
-        
-        // Send data (mutex-protected)
-        {
-            std::lock_guard<std::mutex> lock(dataMutex);
-            if (!sharedPayload.empty()) {
-                tcpServer.sendData(sharedPayload);
+void FeedbackThreadMethod(TCPServer& server, const std::atomic<bool>& stopRequested) {
+    while (!stopRequested) {
+        if (!server.isConnected()) {
+            if (!server.startListening()) {
+                if (!stopRequested) {
+                    std::cerr << "[TCP] Unable to accept a client; retrying." << std::endl;
+                    std::this_thread::sleep_for(std::chrono::milliseconds(250));
+                    continue;
+                }
+                return;
             }
         }
-        
-        // Timing verificatie: log elke 100 cycles (5 seconden bij 20Hz)
-        cycleCounter++;
-        if (cycleCounter % 100 == 0) {
-            auto now = steady_clock::now();
-            auto elapsed = duration_cast<milliseconds>(now - lastLogTime).count();
-            std::cout << "[OUTPUT THREAD] 100 cycles in " << elapsed 
-                      << "ms (target: 5000ms, error: " << (elapsed - 5000) << "ms)" << std::endl;
-            lastLogTime = now;
-        }
-        
-        // Wait until next cycle
-        nextWakeup += interval;
-        std::this_thread::sleep_until(nextWakeup);
+
+        server.receiveData();
     }
-    
-    std::cout << "[OUTPUT THREAD] Stopped" << std::endl;
 }
 
-void startOutputThread(std::thread& outputThread) {
-    outputThread = std::thread(&outputThreadMethod);
+void OutputThreadMethod(
+    TCPServer& server,
+    const SimConnectHandler& simulator,
+    DashboardModel& dashboard,
+    const std::atomic<bool>& stopRequested) {
+    auto nextWakeup = std::chrono::steady_clock::now();
+    std::string payload;
+
+    while (!stopRequested) {
+        nextWakeup += OutputInterval;
+
+        if (server.isConnected()
+            && server.hasPositionFeedback()
+            && simulator.TryGetLatestPayload(payload)) {
+            if (server.sendData(payload)) {
+                LogProtocolMessage("SEND", payload);
+                dashboard.RecordCommandSent();
+            }
+        }
+
+        std::this_thread::sleep_until(nextWakeup);
+
+        // Do not run a burst of catch-up sends after a delayed cycle.
+        const auto now = std::chrono::steady_clock::now();
+        if (now > nextWakeup + OutputInterval) {
+            nextWakeup = now;
+        }
+    }
+}
 }
 
 int main() {
-    SimConnectHandler handler = SimConnectHandler(&tcpServer);
-    tcpServer.startListening();
-    if (handler.InitializeSimConnect()) {
-        std::cout << "Program running. Close the window to exit..." << std::endl;
+    SetProcessDPIAware();
+    PrintStartupBanner();
 
-        // [NEW] Declare both listener and output threads
-        std::thread listeningThread;
-        std::thread outputThread;
+    DashboardModel dashboard;
+    dashboard.AddEvent(std::string("Motion bridge started in ") + ACTIVE_TARGET_NAME + " mode");
 
-        // [NEW] Start both threads
-        startPositionsThread(listeningThread);  // Ontvangt position feedback van PLC
-        startOutputThread(outputThread);         // Stuurt data naar PLC op 20Hz
-
-        // Main loop to keep receiving data until the window is closed
-        while (true) {
-            SimConnect_CallDispatch(hSimConnect, SimConnectHandler::MyDispatchProcRD, nullptr);
-            Sleep(1);  // Small delay to reduce CPU usage
-
-            // Process window messages
-            if (!ProcessWindowsMessages()) {
-                std::cout << "Window closed. Exiting..." << std::endl;
-                shouldStop = true;  // Signal threads to stop
-                break;
-            }
-        }
-
-        // [NEW] Join both threads before closing
-        if (outputThread.joinable()) {
-            outputThread.join();
-        }
-        if (listeningThread.joinable()) {
-            listeningThread.join();
-        }
-
-        // Close the connection when done
-        handler.CloseSimConnect();
+    HmiWindow hmi(dashboard, ACTIVE_TARGET_NAME, ACTIVE_BIND_IP, ACTIVE_PORT);
+    if (!hmi.Create(GetModuleHandle(nullptr), SW_SHOWDEFAULT)) {
+        std::cerr << "[HMI] Unable to create the dashboard window." << std::endl;
+        return 1;
     }
 
+    TCPServer server(ACTIVE_BIND_IP, ACTIVE_PORT, &dashboard);
+    SimConnectHandler simulator(server, &dashboard);
+    std::atomic<bool> stopRequested{ false };
+    std::thread feedbackThread(FeedbackThreadMethod, std::ref(server), std::cref(stopRequested));
+    std::thread outputThread(
+        OutputThreadMethod,
+        std::ref(server),
+        std::cref(simulator),
+        std::ref(dashboard),
+        std::cref(stopRequested));
+
+    std::cout << "[APP] Running. Close the HMI, console, or MSFS to stop." << std::endl;
+    dashboard.AddEvent("Dashboard ready; control workers are running");
+
+    auto nextSimConnectAttempt = std::chrono::steady_clock::now();
+
+    while (!simulator.QuitRequested() && ProcessWindowsMessages()) {
+        const auto now = std::chrono::steady_clock::now();
+        if (hSimConnect == nullptr && now >= nextSimConnectAttempt) {
+            simulator.InitializeSimConnect();
+            nextSimConnectAttempt = now + SimConnectRetryInterval;
+        }
+
+        if (hSimConnect != nullptr) {
+            const HRESULT dispatchResult = SimConnect_CallDispatch(
+                hSimConnect,
+                SimConnectHandler::MyDispatchProcRD,
+                &simulator);
+            if (FAILED(dispatchResult)) {
+                std::cerr << "[SIM] Dispatch failed; reconnecting." << std::endl;
+                dashboard.AddEvent("SimConnect dispatch failed; reconnecting", DashboardEventLevel::Warning);
+                simulator.CloseSimConnect();
+                nextSimConnectAttempt = now + SimConnectRetryInterval;
+            }
+        }
+        Sleep(5);
+    }
+
+    std::cout << "[APP] Shutting down..." << std::endl;
+    dashboard.AddEvent("Application shutdown requested");
+    stopRequested = true;
+    server.closeConnection();
+
+    if (outputThread.joinable()) {
+        outputThread.join();
+    }
+    if (feedbackThread.joinable()) {
+        feedbackThread.join();
+    }
+
+    simulator.CloseSimConnect();
+    std::cout << "[APP] Shutdown complete." << std::endl;
     return 0;
 }

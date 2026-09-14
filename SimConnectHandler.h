@@ -1,30 +1,32 @@
-#ifndef SIMCONNECTHANDLER_H
-#define SIMCONNECTHANDLER_H
+#pragma once
 
-#include <windows.h>
-#include <SimConnect.h>
-#include <iostream>
-#include <fstream>
 #include "TCPServer.h"
 
-// Define a data structure to hold the roll, pitch, and yaw
+#include <SimConnect.h>
+#include <windows.h>
+
+#include <atomic>
+#include <chrono>
+#include <mutex>
+#include <string>
+
+class DashboardModel;
+
+// This layout must match the two values registered with SimConnect.
 struct AircraftOrientation {
-    double pitch;   // Pitch angle in radians
-    double bank;    // Roll angle in radians (also known as bank)
-    double heading; // Heading angle in radians (also known as yaw)
+    double pitch;
+    double bank;
 };
 
 struct RudderData {
-    double deflection; // Rudder deflection in degrees
+    double deflection;
 };
 
-// Simulation event IDs
 enum DATA_DEFINE_ID {
     DEFINITION_ORIENTATION,
     DEFINITION_RUDDER
 };
 
-// Request IDs
 enum DATA_REQUEST_ID {
     REQUEST_ORIENTATION,
     REQUEST_RUDDER
@@ -34,19 +36,30 @@ extern HANDLE hSimConnect;
 
 class SimConnectHandler {
 public:
-    SimConnectHandler(TCPServer* server);
+    explicit SimConnectHandler(TCPServer& server, DashboardModel* dashboard = nullptr);
 
-    // Callback function to handle SimConnect data reception
-    static void CALLBACK MyDispatchProcRD(SIMCONNECT_RECV* pData, DWORD cbData, void* pContext);
+    static void CALLBACK MyDispatchProcRD(SIMCONNECT_RECV* data, DWORD dataSize, void* context);
 
-    // Function to initialize the connection to SimConnect and request data
     bool InitializeSimConnect();
-
-    // Function to close the SimConnect connection
     void CloseSimConnect();
-private:    
+
+    // Copies the newest command built by the SimConnect callback.
+    bool TryGetLatestPayload(std::string& payload) const;
+    bool QuitRequested() const noexcept;
+
+private:
+    void HandleDispatch(SIMCONNECT_RECV* data);
+    void HandleOrientation(const AircraftOrientation& orientation);
+    void PublishPayload(std::string payload);
+
+    TCPServer& server_;
+    double rudderDeflectionDegrees_ = 0.0;
+    std::chrono::steady_clock::time_point nextCalculation_;
+    std::chrono::steady_clock::time_point nextLimitWarning_;
+
+    mutable std::mutex payloadMutex_;
+    std::string latestPayload_;
+    std::atomic<bool> quitRequested_{ false };
+    DashboardModel* dashboard_ = nullptr;
+    bool connectionFailureReported_ = false;
 };
-
-
-
-#endif // SIMCONNECTHANDLER_H

@@ -1,60 +1,71 @@
-#ifndef TCP_SERVER_H
-#define TCP_SERVER_H
+#pragma once
 
-#include <iostream>
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+
+#include <array>
+#include <atomic>
+#include <mutex>
 #include <string>
-#include <cstring>
 #include <winsock2.h>
 #include <ws2tcpip.h>
-#include <vector>
-#include <nlohmann/json.hpp> // Include the nlohmann JSON library
 
-#pragma comment(lib, "ws2_32.lib") // Link with ws2_32.lib
+#ifdef _MSC_VER
+#pragma comment(lib, "ws2_32.lib")
+#endif
 
-using json = nlohmann::json;  // For convenience
+class DashboardModel;
 
 class TCPServer {
 public:
-    bool isConnected;           // Connection status
+    static constexpr std::size_t ActuatorCount = 6;
 
-    // Constructor that initializes the server IP and port (default values can be provided)
-    TCPServer(const std::string& server_ip = "192.168.137.123", int server_port = 32760);
-
-    // Localhost for simulator
-    //TCPServer(const std::string& server_ip = "127.0.0.1", int server_port = 32760);
-    //  4844
-    // Destructor to clean up resources
+    explicit TCPServer(
+        const std::string& serverIp = "192.168.137.123",
+        int serverPort = 32760,
+        DashboardModel* dashboard = nullptr);
     ~TCPServer();
 
-    // Start listening for incoming client connections
-    void startListening();
+    TCPServer(const TCPServer&) = delete;
+    TCPServer& operator=(const TCPServer&) = delete;
 
-    // Send data to the connected client
-    void sendData(const std::string& data);
+    // Blocks until a client connects or the server is shut down.
+    bool startListening();
 
-    // Receive data from the client and parse it
-    void receiveData();
+    // Sends/receives one newline-delimited JSON message. False means that the
+    // client disconnected or an unrecoverable socket error occurred.
+    bool sendData(const std::string& data);
+    bool receiveData();
 
-    // Close the connection
+    // Closes both sockets and unblocks any pending accept/recv operation.
     void closeConnection();
 
-    // Getter for currentPositions to access it outside of the class
-    std::array<float, 6> getCurrentPositions() const;
+    bool isConnected() const noexcept;
+    bool hasPositionFeedback() const noexcept;
+    std::array<float, ActuatorCount> getCurrentPositions() const;
 
 private:
-    SOCKET server_sock;         // Server socket
-    SOCKET client_sock;         // Client socket
-    sockaddr_in server_address; // Server address
-    sockaddr_in client_address; // Client address
+    void closeClientConnection();
+    void enableKeepAlive(SOCKET socket, DWORD keepAliveTime, DWORD keepAliveInterval) const;
+    void processMessage(const std::string& message);
 
-    // Vector to store the current positions (6 floats)
-    std::array<float, 6> currentPositions;
+    SOCKET serverSocket_;
+    SOCKET clientSocket_;
+    sockaddr_in serverAddress_{};
+    sockaddr_in clientAddress_{};
 
-    // Accept an incoming client connection
-    void acceptClient();
+    std::atomic<bool> connected_{ false };
+    std::atomic<bool> hasPositionFeedback_{ false };
+    std::atomic<bool> shuttingDown_{ false };
+    bool winsockStarted_ = false;
+    bool listeningStarted_ = false;
 
-    // Enable TCP keep-alive on the client socket
-    void enableKeepAlive(SOCKET sock, DWORD keepAliveTime, DWORD keepAliveInterval);
+    mutable std::mutex connectionMutex_;
+    mutable std::mutex positionsMutex_;
+    std::mutex sendMutex_;
+
+    std::array<float, ActuatorCount> currentPositions_{};
+    std::string receiveBuffer_;
+    DashboardModel* dashboard_ = nullptr;
 };
-
-#endif // TCP_SERVER_H

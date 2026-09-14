@@ -1,15 +1,18 @@
-﻿#include "TCPServer.h"
 #include "SimConnectHandler.h"
-#include "calculate_legs.h"  // Include the calculate_legs header
-#include <windows.h>
-#include <nlohmann/json.hpp>
-#include <iostream>
-#include <cmath>  // For M_PI
-#include <thread>
-#include <vector>  
-#include <cstdio>   // [CHANGED] voor std::snprintf
 
-#include "BuildMode.h" // [CHANGED] modus-schakelaar
+#include "BuildMode.h"
+#include "DashboardModel.h"
+#include "calculate_legs.h"
+
+#include <algorithm>
+#include <array>
+#include <chrono>
+#include <cmath>
+#include <iostream>
+#include <nlohmann/json.hpp>
+#include <sstream>
+#include <string>
+#include <utility>
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -17,264 +20,167 @@
 
 HANDLE hSimConnect = nullptr;
 
-std::ofstream logFile;
+namespace {
+constexpr std::size_t ActuatorCount = TCPServer::ActuatorCount;
+constexpr double MaximumPitchDegrees = 30.0;
+constexpr double MaximumRollDegrees = 30.0;
+constexpr double MaximumYawDegrees = 30.0;
+constexpr float ControlRateHz = 20.0f;
+constexpr float SpeedLimit = 500.0f;
+constexpr float MinimumSpeed = 2.0f;
+constexpr float MaximumStepPerSecond = 400.0f;
+constexpr float PositionDeadzone = 0.0f;
+constexpr float BaseLegLength = 1156.372420286821f;
+constexpr float NeutralActuatorPosition = 200.0f;
+const auto ControlInterval = std::chrono::milliseconds(50);
 
-TCPServer* tcpServer;
-static int counter = 0;
-
-SimConnectHandler::SimConnectHandler(TCPServer* server)
-{
-    tcpServer = server;
-    logFile.open("logs/FlightSim_StewardServer_Log.txt");
-}
-
-// Base and platform leg positions for computation
-vec base_legs[6] = {
-    {177.53, 723.37, 0},
-    {-177.53, 723.37, 0},
-    {-715.23, -207.94, 0},
-    {-537.69, -515.43, 0},
-    {537.69, -515.43, 0},
-    {715.23, -207.94, 0}
+// Physical mounting coordinates for the six-actuator Stewart platform.
+vec baseLegs[ActuatorCount] = {
+    {177.53f, 723.37f, 0.0f},
+    {-177.53f, 723.37f, 0.0f},
+    {-715.23f, -207.94f, 0.0f},
+    {-537.69f, -515.43f, 0.0f},
+    {537.69f, -515.43f, 0.0f},
+    {715.23f, -207.94f, 0.0f}
 };
 
-vec platform_legs[6] = {
-    {360.59, 346.0, 0},
-    {-360.59, 346.0, 0},
-    {-480.12, 139.59, 0},
-    {-119.17, -485.59, 0},
-    {119.17, -485.59, 0},
-    {480.12, 139.59, 0}
+vec platformLegs[ActuatorCount] = {
+    {360.59f, 346.0f, 0.0f},
+    {-360.59f, 346.0f, 0.0f},
+    {-480.12f, 139.59f, 0.0f},
+    {-119.17f, -485.59f, 0.0f},
+    {119.17f, -485.59f, 0.0f},
+    {480.12f, 139.59f, 0.0f}
 };
 
-vec start_height{ 0, 0, 1079 };  // Starting height of the platform
-std::vector<float> legLengths(6); // To hold the computed leg lengths
-std::vector<float> speeds(6);
+vec startHeight{ 0.0f, 0.0f, 1079.0f };
 
-const float REFRESH_RATE = 20.0f;     // in Hz
-const float SPEED_LIMIT = 500.0f;     // absolute hard cap naar PLC (eventueel lager kiezen)
-const float MIN_SPEED = 2.0f;       // minimale snelheid zodat hij niet “doodvalt”
-
-// Max positieverschil dat we per seconde mogen willen (in dezelfde units als legLengths)
-const float MAX_STEP_PER_SEC = 400.0f;   // tuning: kleiner = smoother, minder kans op overspeed
-const float POSITION_DEADZONE = .0f;   // kleiner dan dit → behandelen als stilstand
-
-// [NEW] Timestamp voor logging
-std::chrono::steady_clock::time_point startTime = std::chrono::steady_clock::now();
-
-
-// Function to clamp a value between min and max
-double clamp(double value, double min, double max) {
-    if (value > max) {
-        return max;
-    }
-    else if (value < min) {
-        return min;
-    }
-    return value;
+double Clamp(double value, double minimum, double maximum) {
+    return std::max(minimum, std::min(value, maximum));
 }
 
-std::string CheckDigitCount(int value)
-{
-    if (value >= 100)
-        return std::to_string(value);
-    else if (value < 100 && value >= 10)
-        return "0" + std::to_string(value);
-    else
-        return "00" + std::to_string(value);
-}
-
-// ===== [CHANGED] helpers voor payload-opbouw (Unity/PLC) =====
-static inline std::string pad3(int v) {
-    if (v < 0) v = 0; if (v > 999) v = 999;
-    char buf[4]{};
-    std::snprintf(buf, sizeof(buf), "%03d", v);
-    return std::string(buf);
-}
-
-static std::string buildUnityPayload(double yaw_deg, double roll_deg, double pitch_deg,
-    const std::vector<float>& legLengths,
-    const std::vector<float>& speeds) {
-    std::vector<int> pos(6), spd(6);
-    for (int i = 0; i < 6; ++i) {
-        pos[i] = static_cast<int>(std::lround(legLengths[i]));
-        spd[i] = static_cast<int>(std::lround(speeds[i]));
-    }
-    nlohmann::json j;
-    j["orientation"] = { {"yaw", yaw_deg}, {"roll", roll_deg}, {"pitch", pitch_deg} };
-    j["legs"] = pos;
-    j["positions"] = pos;
-    j["speeds"] = spd;
-    return j.dump();
-}
-
-static std::string buildPlcPayload(const std::vector<float>& legLengths,
-    const std::vector<float>& speeds) {
-    std::string s = "{\"positions\":[";
-    for (int i = 0; i < 6; ++i) {
-        if (i) s += ",";
-        const int v = static_cast<int>(std::lround(legLengths[i]));
-        s += (PLC_VALUES_ARE_STRINGS ? ("\"" + pad3(v) + "\"") : std::to_string(v));
-    }
-    s += "],\"speeds\":[";
-    for (int i = 0; i < 6; ++i) {
-        if (i) s += ",";
-        const int v = static_cast<int>(std::lround(speeds[i]));
-        s += (PLC_VALUES_ARE_STRINGS ? ("\"" + pad3(v) + "\"") : std::to_string(v));
-    }
-    s += "]}";
-    return s;
-}
-// ===== [CHANGED] einde helpers =====
-
-void CALLBACK SimConnectHandler::MyDispatchProcRD(SIMCONNECT_RECV* pData, DWORD cbData, void* pContext) {
-    static double rudder_deflection_deg = 0.0; // Variable to hold rudder deflection
-
-    //Constraints for maximum attitude
-    static const double PITCH_CONSTRAINT = 30;
-    static const double ROLL_CONSTRAINT = 30;
-    static const double YAW_CONSTRAINT = 30;
-
-    switch (pData->dwID) {
-    case SIMCONNECT_RECV_ID_SIMOBJECT_DATA: {
-        SIMCONNECT_RECV_SIMOBJECT_DATA* pObjData = (SIMCONNECT_RECV_SIMOBJECT_DATA*)pData;
-
-        // Handle orientation data
-        if (pObjData->dwRequestID == REQUEST_ORIENTATION) {
-            AircraftOrientation* pS = (AircraftOrientation*)&pObjData->dwData;
-
-            std::array<float, 6> currentLegLengths = tcpServer->getCurrentPositions();
-
-            // Invert pitch and convert radians to degrees
-            double pitch_deg = -pS->pitch * (180.0 / M_PI);  // Invert pitch
-            double roll_deg = pS->bank * (180.0 / M_PI);
-            double yaw_deg = rudder_deflection_deg * -1; // Assign yaw from rudder deflection
-
-            // Store pre-clamp values for logging
-            double preclamp_pitch = pitch_deg;
-            double preclamp_roll = roll_deg;
-            double preclamp_yaw = yaw_deg;
-
-            // Clamp the values to the defined limits
-            pitch_deg = clamp(pitch_deg, -PITCH_CONSTRAINT, PITCH_CONSTRAINT);
-            roll_deg = clamp(roll_deg, -ROLL_CONSTRAINT, ROLL_CONSTRAINT);
-            yaw_deg = clamp(yaw_deg, -YAW_CONSTRAINT, YAW_CONSTRAINT);
-
-            std::cout << "Current actuator positions: ";
-            for (float v : currentLegLengths) {
-                std::cout << v << " ";
-            }
-            std::cout << std::endl;
-           
-            // Log warnings if the values are adjusted
-            if (preclamp_pitch != pitch_deg) {
-                std::cout << "Warning: Pitch adjusted to stay within limits: " << pitch_deg << " degrees\n";
-            }
-            if (preclamp_roll != roll_deg) {
-                std::cout << "Warning: Roll adjusted to stay within limits: " << roll_deg << " degrees\n";
-            }
-            if (preclamp_yaw != yaw_deg) {
-                std::cout << "Warning: Yaw adjusted to stay within limits: " << yaw_deg << " degrees\n";
-            }
-
-            // Calculate the leg lengths based on the current orientation
-            float base_len = 1156.372420286821;  // Base leg length
-
-            //float time_in_seconds = 1.0f / REFRESH_RATE; // Convert hertz to time in seconds
-
-            /*for (size_t i = 0; i < 6; i++) {
-                // Yaw_deg, roll_deg, pitch_deg
-                float li = compute_li_length(start_height, yaw_deg, (roll_deg * -1), pitch_deg, platform_legs[i], base_legs[i]);
-                // Append each computed leg length to the string
-                legLengths[i] = std::round((li - base_len) + 200); // Store the computed leg length
-
-                // Calculate speed based on leg length and time, enforce speed limit
-                int calculatedSpeed = std::abs((legLengths[i] - currentLegLengths[i]) / time_in_seconds);
-                float raw_speed = std::abs(calculatedSpeed / time_in_seconds); // Ensure speed is positive
-
-                // Enforce the speed limit
-                if (calculatedSpeed > SPEED_LIMIT) {
-                    speeds[i] = SPEED_LIMIT;
-                }
-                else if (calculatedSpeed <= SPEED_LIMIT && calculatedSpeed > 0)
-                {
-                    speeds[i] = calculatedSpeed;
-                }
-                else if (calculatedSpeed <= 0) {
-                    speeds[i] = 5;
-                }
-            }
-            */
-            float time_in_seconds = 1.0f / REFRESH_RATE; // 20 Hz → 0.05 s
-
-            for (size_t i = 0; i < 6; i++) {
-                // 1. Bereken “ideale” cilinderlengte uit de geometrie
-                float li = compute_li_length(start_height, yaw_deg, (roll_deg * -1), pitch_deg, platform_legs[i], base_legs[i]);
-                float desiredLength = std::round((li - base_len) + 200);  // oude legLengths[i]-logica
-
-                // 2. Gebruik de teruggekoppelde positie als startpunt
-                float currentLength = currentLegLengths[i];
-
-                // 3. Begrens hoeveel we per cycle mogen veranderen (acceleration limiter)
-                float delta = desiredLength - currentLength;
-                float maxStep = MAX_STEP_PER_SEC * time_in_seconds;  // max verplaatsing in deze cycle
-
-                if (delta > maxStep)       delta = maxStep;
-                else if (delta < -maxStep) delta = -maxStep;
-
-                // Nieuwe targetpositie = huidige positie + begrensde stap
-                float limitedTarget = currentLength + delta;
-                legLengths[i] = limitedTarget;
-
-                // 4. Bepaal afstand die we in deze cycle willen afleggen
-                float stepDistance = std::fabs(delta);
-
-                // 5. Deadzone: als we bijna op positie zitten, stuur minimale snelheid
-                float speed;
-                if (stepDistance < POSITION_DEADZONE) {
-                    speed = MIN_SPEED;
-                }
-                else {
-                    // Bepaal gewenste snelheid op basis van afstand per tijd
-                    float requestedSpeed = stepDistance / time_in_seconds; // units per seconde
-
-                    // Begrens de snelheid
-                    if (requestedSpeed > SPEED_LIMIT)   requestedSpeed = SPEED_LIMIT;
-                    if (requestedSpeed < MIN_SPEED)     requestedSpeed = MIN_SPEED;
-
-                    speed = requestedSpeed;
-                }
-
-                speeds[i] = speed;
-            }
-
-            // ===== [CHANGED] build & send payload per modus =====
-            std::string payload;
 #ifdef TARGET_PLC
-            payload = buildPlcPayload(legLengths, speeds);
-#else
-            payload = buildUnityPayload(yaw_deg, roll_deg, pitch_deg, legLengths, speeds);
+// Retained legacy formatter and reused by the active PLC payload builder.
+std::string CheckDigitCount(int value) {
+    if (value >= 100) {
+        return std::to_string(value);
+    }
+    if (value >= 10) {
+        return "0" + std::to_string(value);
+    }
+    return "00" + std::to_string(value);
+}
+
+std::string PadThreeDigits(int value) {
+    value = std::max(0, std::min(value, 999));
+    return CheckDigitCount(value);
+}
 #endif
 
-            tcpServer->sendData(payload);   // sendData voegt terminator toe
-            
-            // [NEW] Log met timestamp
-            auto now = std::chrono::steady_clock::now();
-            auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - startTime).count();
-            logFile << "[" << elapsed << "ms] SEND: " << payload << "\n";
-            // ===== [CHANGED] einde =====
+#ifdef TARGET_UNITY
+std::string BuildUnityPayload(
+    double yawDegrees,
+    double rollDegrees,
+    double pitchDegrees,
+    const std::array<float, ActuatorCount>& legLengths,
+    const std::array<float, ActuatorCount>& speeds) {
+    std::array<int, ActuatorCount> positions{};
+    std::array<int, ActuatorCount> roundedSpeeds{};
+    for (std::size_t index = 0; index < ActuatorCount; ++index) {
+        positions[index] = static_cast<int>(std::lround(legLengths[index]));
+        roundedSpeeds[index] = static_cast<int>(std::lround(speeds[index]));
+    }
+
+    nlohmann::json payload;
+    payload["orientation"] = {
+        {"yaw", yawDegrees},
+        {"roll", rollDegrees},
+        {"pitch", pitchDegrees}
+    };
+    payload["legs"] = positions;
+    payload["positions"] = positions;
+    payload["speeds"] = roundedSpeeds;
+    return payload.dump();
+}
+#endif
+
+#ifdef TARGET_PLC
+std::string BuildPlcPayload(
+    const std::array<float, ActuatorCount>& legLengths,
+    const std::array<float, ActuatorCount>& speeds) {
+    std::string payload = "{\"positions\":[";
+    payload.reserve(160);
+
+    for (std::size_t index = 0; index < ActuatorCount; ++index) {
+        if (index > 0) {
+            payload += ',';
         }
-        // Handle rudder deflection data
-        else if (pObjData->dwRequestID == REQUEST_RUDDER) {
-            RudderData* rudder = (RudderData*)&pObjData->dwData; // Cast to your rudder data struct
-            rudder_deflection_deg = rudder->deflection; // Update rudder deflection
+        const int value = static_cast<int>(std::lround(legLengths[index]));
+        payload += PLC_VALUES_ARE_STRINGS
+            ? ('\"' + PadThreeDigits(value) + '\"')
+            : std::to_string(value);
+    }
+
+    payload += "],\"speeds\":[";
+    for (std::size_t index = 0; index < ActuatorCount; ++index) {
+        if (index > 0) {
+            payload += ',';
+        }
+        const int value = static_cast<int>(std::lround(speeds[index]));
+        payload += PLC_VALUES_ARE_STRINGS
+            ? ('\"' + PadThreeDigits(value) + '\"')
+            : std::to_string(value);
+    }
+
+    payload += "]}";
+    return payload;
+}
+#endif
+}
+
+SimConnectHandler::SimConnectHandler(TCPServer& server, DashboardModel* dashboard)
+    : server_(server),
+      nextCalculation_(std::chrono::steady_clock::now()),
+      nextLimitWarning_(std::chrono::steady_clock::time_point::min()),
+      dashboard_(dashboard) {
+}
+
+void CALLBACK SimConnectHandler::MyDispatchProcRD(
+    SIMCONNECT_RECV* data,
+    DWORD dataSize,
+    void* context) {
+    (void)dataSize;
+    if (context != nullptr) {
+        static_cast<SimConnectHandler*>(context)->HandleDispatch(data);
+    }
+}
+
+void SimConnectHandler::HandleDispatch(SIMCONNECT_RECV* data) {
+    switch (data->dwID) {
+    case SIMCONNECT_RECV_ID_SIMOBJECT_DATA: {
+        auto* objectData = reinterpret_cast<SIMCONNECT_RECV_SIMOBJECT_DATA*>(data);
+        if (objectData->dwRequestID == REQUEST_ORIENTATION) {
+            const auto now = std::chrono::steady_clock::now();
+            if (now >= nextCalculation_) {
+                nextCalculation_ = now + ControlInterval;
+                const auto* orientation = reinterpret_cast<const AircraftOrientation*>(&objectData->dwData);
+                HandleOrientation(*orientation);
+            }
+        }
+        else if (objectData->dwRequestID == REQUEST_RUDDER) {
+            const auto* rudder = reinterpret_cast<const RudderData*>(&objectData->dwData);
+            rudderDeflectionDegrees_ = rudder->deflection;
         }
         break;
     }
 
     case SIMCONNECT_RECV_ID_QUIT:
-        std::cout << "Simulator has exited\n";
-        tcpServer->closeConnection(); // Close connection on exit
+        std::cout << "[SIM] Microsoft Flight Simulator exited." << std::endl;
+        if (dashboard_) {
+            dashboard_->SetSimulatorConnected(false);
+            dashboard_->AddEvent("Microsoft Flight Simulator exited", DashboardEventLevel::Warning);
+        }
+        quitRequested_ = true;
         break;
 
     default:
@@ -282,38 +188,173 @@ void CALLBACK SimConnectHandler::MyDispatchProcRD(SIMCONNECT_RECV* pData, DWORD 
     }
 }
 
-bool SimConnectHandler::InitializeSimConnect() {
-    HRESULT hr;
+void SimConnectHandler::HandleOrientation(const AircraftOrientation& orientation) {
+    const double rawPitch = -orientation.pitch * (180.0 / M_PI);
+    const double rawRoll = orientation.bank * (180.0 / M_PI);
+    const double rawYaw = -rudderDeflectionDegrees_;
 
-    if (SUCCEEDED(SimConnect_Open(&hSimConnect, "Retrieve Aircraft Orientation", nullptr, 0, nullptr, 0))) {
-        std::cout << "Connected to MSFS SimConnect\n";
+    const double pitchDegrees = Clamp(rawPitch, -MaximumPitchDegrees, MaximumPitchDegrees);
+    const double rollDegrees = Clamp(rawRoll, -MaximumRollDegrees, MaximumRollDegrees);
+    const double yawDegrees = Clamp(rawYaw, -MaximumYawDegrees, MaximumYawDegrees);
 
-        // Define the data structure we want to receive
-        hr = SimConnect_AddToDataDefinition(hSimConnect, DEFINITION_ORIENTATION, "PLANE PITCH DEGREES", "radians");
-        hr = SimConnect_AddToDataDefinition(hSimConnect, DEFINITION_ORIENTATION, "PLANE BANK DEGREES", "radians");
-
-        // Add rudder deflection data definition
-        hr = SimConnect_AddToDataDefinition(hSimConnect, DEFINITION_RUDDER, "RUDDER DEFLECTION", "degrees");
-
-        // Request data for orientation, wind, and rudder
-        hr = SimConnect_RequestDataOnSimObject(hSimConnect, REQUEST_ORIENTATION, DEFINITION_ORIENTATION, SIMCONNECT_OBJECT_ID_USER, SIMCONNECT_PERIOD_SIM_FRAME);
-        hr = SimConnect_RequestDataOnSimObject(hSimConnect, REQUEST_RUDDER, DEFINITION_RUDDER, SIMCONNECT_OBJECT_ID_USER, SIMCONNECT_PERIOD_SIM_FRAME);
-
-        // Request data for orientation, wind, and rudder 1hz
-        //hr = SimConnect_RequestDataOnSimObject(hSimConnect, REQUEST_ORIENTATION, DEFINITION_ORIENTATION, SIMCONNECT_OBJECT_ID_USER, SIMCONNECT_PERIOD_SECOND);
-        //hr = SimConnect_RequestDataOnSimObject(hSimConnect, REQUEST_RUDDER, DEFINITION_RUDDER, SIMCONNECT_OBJECT_ID_USER, SIMCONNECT_PERIOD_SECOND);
-
-        return true;
+    const auto now = std::chrono::steady_clock::now();
+    if ((rawPitch != pitchDegrees || rawRoll != rollDegrees || rawYaw != yawDegrees)
+        && now >= nextLimitWarning_) {
+        std::cout << "[SIM] Attitude limited to pitch=" << pitchDegrees
+                  << ", roll=" << rollDegrees
+                  << ", yaw=" << yawDegrees << " degrees." << std::endl;
+        if (dashboard_) {
+            std::ostringstream message;
+            message << "Attitude limited: P " << std::lround(pitchDegrees)
+                    << " / R " << std::lround(rollDegrees)
+                    << " / Y " << std::lround(yawDegrees) << " deg";
+            dashboard_->AddEvent(message.str(), DashboardEventLevel::Warning);
+        }
+        nextLimitWarning_ = now + std::chrono::seconds(1);
     }
-    else {
-        std::cout << "Unable to connect to MSFS SimConnect\n";
+
+    if (dashboard_) {
+        dashboard_->UpdateOrientation(pitchDegrees, rollDegrees, yawDegrees);
+    }
+
+    if (!server_.hasPositionFeedback()) {
+        return;
+    }
+
+    const auto currentLegLengths = server_.getCurrentPositions();
+
+    constexpr float controlStepSeconds = 1.0f / ControlRateHz;
+    constexpr float maximumStep = MaximumStepPerSecond * controlStepSeconds;
+    std::array<float, ActuatorCount> targetLengths{};
+    std::array<float, ActuatorCount> speeds{};
+
+    for (std::size_t index = 0; index < ActuatorCount; ++index) {
+        const float geometricLength = compute_li_length(
+            startHeight,
+            static_cast<float>(yawDegrees),
+            static_cast<float>(-rollDegrees),
+            static_cast<float>(pitchDegrees),
+            platformLegs[index],
+            baseLegs[index]);
+        const float desiredLength = std::round(
+            geometricLength - BaseLegLength + NeutralActuatorPosition);
+
+        const float requestedDelta = desiredLength - currentLegLengths[index];
+        const float limitedDelta = std::max(-maximumStep, std::min(requestedDelta, maximumStep));
+        targetLengths[index] = currentLegLengths[index] + limitedDelta;
+
+        const float distance = std::fabs(limitedDelta);
+        if (distance <= PositionDeadzone) {
+            speeds[index] = MinimumSpeed;
+        }
+        else {
+            speeds[index] = std::max(
+                MinimumSpeed,
+                std::min(distance / controlStepSeconds, SpeedLimit));
+        }
+    }
+
+    if (dashboard_) {
+        dashboard_->UpdateMotion(
+            pitchDegrees,
+            rollDegrees,
+            yawDegrees,
+            targetLengths,
+            speeds);
+    }
+
+#ifdef TARGET_PLC
+    PublishPayload(BuildPlcPayload(targetLengths, speeds));
+#else
+    PublishPayload(BuildUnityPayload(yawDegrees, rollDegrees, pitchDegrees, targetLengths, speeds));
+#endif
+}
+
+void SimConnectHandler::PublishPayload(std::string payload) {
+    std::lock_guard<std::mutex> lock(payloadMutex_);
+    latestPayload_ = std::move(payload);
+}
+
+bool SimConnectHandler::TryGetLatestPayload(std::string& payload) const {
+    std::lock_guard<std::mutex> lock(payloadMutex_);
+    if (latestPayload_.empty()) {
         return false;
     }
+
+    payload = latestPayload_;
+    return true;
+}
+
+bool SimConnectHandler::QuitRequested() const noexcept {
+    return quitRequested_;
+}
+
+bool SimConnectHandler::InitializeSimConnect() {
+    if (FAILED(SimConnect_Open(
+        &hSimConnect,
+        "Retrieve Aircraft Orientation",
+        nullptr,
+        0,
+        nullptr,
+        0))) {
+        if (!connectionFailureReported_) {
+            std::cerr << "[SIM] Unable to connect to Microsoft Flight Simulator." << std::endl;
+            if (dashboard_) {
+                dashboard_->AddEvent("Waiting for Microsoft Flight Simulator", DashboardEventLevel::Warning);
+            }
+            connectionFailureReported_ = true;
+        }
+        if (dashboard_) {
+            dashboard_->SetSimulatorConnected(false);
+        }
+        return false;
+    }
+
+    connectionFailureReported_ = false;
+    std::cout << "[SIM] Connected to Microsoft Flight Simulator." << std::endl;
+    if (dashboard_) {
+        dashboard_->SetSimulatorConnected(true);
+        dashboard_->AddEvent("SimConnect session established");
+    }
+
+    const HRESULT pitchResult = SimConnect_AddToDataDefinition(
+        hSimConnect, DEFINITION_ORIENTATION, "PLANE PITCH DEGREES", "radians");
+    const HRESULT bankResult = SimConnect_AddToDataDefinition(
+        hSimConnect, DEFINITION_ORIENTATION, "PLANE BANK DEGREES", "radians");
+    const HRESULT rudderResult = SimConnect_AddToDataDefinition(
+        hSimConnect, DEFINITION_RUDDER, "RUDDER DEFLECTION", "degrees");
+    const HRESULT orientationRequest = SimConnect_RequestDataOnSimObject(
+        hSimConnect,
+        REQUEST_ORIENTATION,
+        DEFINITION_ORIENTATION,
+        SIMCONNECT_OBJECT_ID_USER,
+        SIMCONNECT_PERIOD_SIM_FRAME);
+    const HRESULT rudderRequest = SimConnect_RequestDataOnSimObject(
+        hSimConnect,
+        REQUEST_RUDDER,
+        DEFINITION_RUDDER,
+        SIMCONNECT_OBJECT_ID_USER,
+        SIMCONNECT_PERIOD_SIM_FRAME);
+
+    if (FAILED(pitchResult) || FAILED(bankResult) || FAILED(rudderResult)
+        || FAILED(orientationRequest) || FAILED(rudderRequest)) {
+        std::cerr << "[SIM] Failed to register one or more data requests." << std::endl;
+        if (dashboard_) {
+            dashboard_->AddEvent("SimConnect data registration failed", DashboardEventLevel::Error);
+        }
+        CloseSimConnect();
+        return false;
+    }
+
+    return true;
 }
 
 void SimConnectHandler::CloseSimConnect() {
-    if (hSimConnect) {
+    if (hSimConnect != nullptr) {
         SimConnect_Close(hSimConnect);
         hSimConnect = nullptr;
+    }
+    if (dashboard_) {
+        dashboard_->SetSimulatorConnected(false);
     }
 }
