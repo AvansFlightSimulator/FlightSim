@@ -150,14 +150,17 @@ void CALLBACK SimConnectHandler::MyDispatchProcRD(SIMCONNECT_RECV* pData, DWORD 
             double roll_deg = pS->bank * (180.0 / M_PI);
             double yaw_deg = rudder_deflection_deg * -1; // Assign yaw from rudder deflection
 
+            std::cout << "\033[38;5;196m" << "Pitch: " << pitch_deg << "  Roll: " << roll_deg << "  YAW: " << yaw_deg << "\033[0m\n";
+
             // Store pre-clamp values for logging
             double preclamp_pitch = pitch_deg;
             double preclamp_roll = roll_deg;
             double preclamp_yaw = yaw_deg;
-
+            
             // Clamp the values to the defined limits
             pitch_deg = clamp(pitch_deg, -PITCH_CONSTRAINT, PITCH_CONSTRAINT);
             roll_deg = clamp(roll_deg, -ROLL_CONSTRAINT, ROLL_CONSTRAINT);
+
             yaw_deg = clamp(yaw_deg, -YAW_CONSTRAINT, YAW_CONSTRAINT);
 
             std::cout << "Current actuator positions: ";
