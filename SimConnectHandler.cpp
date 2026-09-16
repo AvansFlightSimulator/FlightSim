@@ -56,7 +56,7 @@ vec platformLegs[ActuatorCount] = {
 vec startHeight{ 0.0f, 0.0f, 1079.0f };
 
 double Clamp(double value, double minimum, double maximum) {
-    return std::max(minimum, std::min(value, maximum));
+    return (std::max)(minimum, (std::min)(value, maximum));
 }
 
 #ifdef TARGET_PLC
@@ -72,7 +72,7 @@ std::string CheckDigitCount(int value) {
 }
 
 std::string PadThreeDigits(int value) {
-    value = std::max(0, std::min(value, 999));
+    value = (std::max)(0, (std::min)(value, 999));
     return CheckDigitCount(value);
 }
 #endif
@@ -141,7 +141,7 @@ std::string BuildPlcPayload(
 SimConnectHandler::SimConnectHandler(TCPServer& server, DashboardModel* dashboard)
     : server_(server),
       nextCalculation_(std::chrono::steady_clock::now()),
-      nextLimitWarning_(std::chrono::steady_clock::time_point::min()),
+      nextLimitWarning_((std::chrono::steady_clock::time_point::min)()),
       dashboard_(dashboard) {
 }
 
@@ -240,7 +240,7 @@ void SimConnectHandler::HandleOrientation(const AircraftOrientation& orientation
             geometricLength - BaseLegLength + NeutralActuatorPosition);
 
         const float requestedDelta = desiredLength - currentLegLengths[index];
-        const float limitedDelta = std::max(-maximumStep, std::min(requestedDelta, maximumStep));
+        const float limitedDelta = (std::max)(-maximumStep, (std::min)(requestedDelta, maximumStep));
         targetLengths[index] = currentLegLengths[index] + limitedDelta;
 
         const float distance = std::fabs(limitedDelta);
@@ -248,9 +248,9 @@ void SimConnectHandler::HandleOrientation(const AircraftOrientation& orientation
             speeds[index] = MinimumSpeed;
         }
         else {
-            speeds[index] = std::max(
+            speeds[index] = (std::max)(
                 MinimumSpeed,
-                std::min(distance / controlStepSeconds, SpeedLimit));
+                (std::min)(distance / controlStepSeconds, SpeedLimit));
         }
     }
 

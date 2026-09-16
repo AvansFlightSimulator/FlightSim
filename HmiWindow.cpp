@@ -81,7 +81,7 @@ std::string FormatCount(std::uint64_t value) {
 }
 
 std::string FormatElapsed(long long milliseconds) {
-    const long long totalSeconds = std::max(0LL, milliseconds / 1000);
+    const long long totalSeconds = (std::max)(0LL, milliseconds / 1000);
     const long long minutes = totalSeconds / 60;
     const long long seconds = totalSeconds % 60;
     std::ostringstream stream;
@@ -94,7 +94,7 @@ std::string DataAge(long long now, long long sampleTime) {
     if (sampleTime < 0) {
         return "No data yet";
     }
-    const long long age = std::max(0LL, now - sampleTime);
+    const long long age = (std::max)(0LL, now - sampleTime);
     if (age < 1000) {
         return FormatCount(static_cast<std::uint64_t>(age)) + " ms ago";
     }
@@ -152,14 +152,14 @@ void DrawActuatorCard(
     FillRoundedRectangle(dc, track, RGB(38, 52, 67), RGB(38, 52, 67));
 
     if (hasFeedback) {
-        const double currentRatio = std::max(0.0, std::min(1.0, current / 400.0));
+        const double currentRatio = (std::max)(0.0, (std::min)(1.0, current / 400.0));
         RECT fill = track;
         fill.right = fill.left + static_cast<int>((barRight - barLeft) * currentRatio);
         if (fill.right > fill.left) {
             FillRoundedRectangle(dc, fill, Cyan, Cyan);
         }
 
-        const double targetRatio = std::max(0.0, std::min(1.0, target / 400.0));
+        const double targetRatio = (std::max)(0.0, (std::min)(1.0, target / 400.0));
         const int markerX = barLeft + static_cast<int>((barRight - barLeft) * targetRatio);
         HPEN markerPen = CreatePen(PS_SOLID, 2, Amber);
         HGDIOBJ oldPen = SelectObject(dc, markerPen);
@@ -389,7 +389,7 @@ void HmiWindow::Render(HDC dc, const RECT& client, const DashboardSnapshot& snap
     const int diagramLeft = leftPanel.left + 18;
     const int diagramRight = leftPanel.right - 18;
     const int diagramTop = leftPanel.top + 64;
-    const int diagramBottom = std::min(leftPanel.top + 345, leftPanel.bottom - 205);
+    const int diagramBottom = (std::min)(leftPanel.top + 345, leftPanel.bottom - 205);
     const int centerX = (diagramLeft + diagramRight) / 2;
     const int baseCenterY = diagramBottom - 40;
     const int topCenterY = diagramTop + 84;
@@ -414,7 +414,7 @@ void HmiWindow::Render(HDC dc, const RECT& client, const DashboardSnapshot& snap
     for (int index = 0; index < 6; ++index) {
         const float position = snapshot.currentPositions[index];
         const int thickness = snapshot.positionFeedback
-            ? 3 + static_cast<int>(std::max(0.0f, std::min(4.0f, position / 100.0f)))
+            ? 3 + static_cast<int>((std::max)(0.0f, (std::min)(4.0f, position / 100.0f)))
             : 3;
         HPEN legPen = CreatePen(PS_SOLID, thickness, snapshot.positionFeedback ? Cyan : RGB(74, 89, 103));
         HGDIOBJ previousPen = SelectObject(dc, legPen);
@@ -476,8 +476,8 @@ void HmiWindow::Render(HDC dc, const RECT& client, const DashboardSnapshot& snap
     if (activityTop < leftPanel.bottom - 38) {
         DrawTextValue(dc, smallFont_, "SYSTEM ACTIVITY",
             MakeRect(leftPanel.left + 18, activityTop, leftPanel.right - 18, activityTop + 22), SecondaryText);
-        const int availableRows = std::max(1, (leftPanel.bottom - activityTop - 27) / 20);
-        const int firstEvent = std::max(0, static_cast<int>(snapshot.events.size()) - availableRows);
+        const int availableRows = (std::max)(1, static_cast<int>((leftPanel.bottom - activityTop - 27) / 20));
+        const int firstEvent = (std::max)(0, static_cast<int>(snapshot.events.size()) - availableRows);
         int row = 0;
         for (int index = firstEvent; index < static_cast<int>(snapshot.events.size()); ++index, ++row) {
             const DashboardEvent& event = snapshot.events[index];
