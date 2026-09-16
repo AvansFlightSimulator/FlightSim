@@ -4,7 +4,7 @@
 #define WIN32_LEAN_AND_MEAN
 #endif
 
-#include <array>
+#include "ControllerProtocol.h"
 #include <atomic>
 #include <mutex>
 #include <string>
@@ -19,11 +19,9 @@ class DashboardModel;
 
 class TCPServer {
 public:
-    static constexpr std::size_t ActuatorCount = 6;
-
     explicit TCPServer(
-        const std::string& serverIp = "192.168.137.123",
-        int serverPort = 32760,
+        const std::string& serverIp,
+        int serverPort,
         DashboardModel* dashboard = nullptr);
     ~TCPServer();
 
@@ -33,8 +31,9 @@ public:
     // Blocks until a client connects or the server is shut down.
     bool startListening();
 
-    // Sends/receives one newline-delimited JSON message. False means that the
-    // client disconnected or an unrecoverable socket error occurred.
+    // Sends one JSON object, adding its newline. Receive reads a TCP chunk,
+    // which may contain partial or multiple messages. False means disconnected
+    // or an unrecoverable socket error. Use one worker per direction.
     bool sendData(const std::string& data);
     bool receiveData();
 
@@ -43,7 +42,7 @@ public:
 
     bool isConnected() const noexcept;
     bool hasPositionFeedback() const noexcept;
-    std::array<float, ActuatorCount> getCurrentPositions() const;
+    ActuatorValues getCurrentPositions() const;
 
 private:
     void closeClientConnection();
@@ -61,11 +60,14 @@ private:
     bool winsockStarted_ = false;
     bool listeningStarted_ = false;
 
+    // Never hold connectionMutex_ during blocking socket calls. sendMutex_
+    // prevents interleaved sends; positionsMutex_ protects feedback snapshots.
     mutable std::mutex connectionMutex_;
     mutable std::mutex positionsMutex_;
     std::mutex sendMutex_;
 
-    std::array<float, ActuatorCount> currentPositions_{};
-    std::string receiveBuffer_;
+    ActuatorValues currentPositions_{};
+    // Only the feedback worker accesses stream state and accepts clients.
+    FeedbackStream feedbackStream_;
     DashboardModel* dashboard_ = nullptr;
 };

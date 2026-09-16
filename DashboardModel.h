@@ -1,6 +1,6 @@
 #pragma once
 
-#include <array>
+#include "BridgeTypes.h"
 #include <chrono>
 #include <cstdint>
 #include <deque>
@@ -27,13 +27,20 @@ struct DashboardSnapshot {
     bool positionFeedback = false;
     bool motionAvailable = false;
 
-    std::array<float, 6> currentPositions{};
-    std::array<float, 6> targetPositions{};
-    std::array<float, 6> speeds{};
+    ActuatorValues currentPositions{};
+    ActuatorValues targetPositions{};
+    ActuatorValues speeds{};
 
     double pitchDegrees = 0.0;
     double rollDegrees = 0.0;
     double yawDegrees = 0.0;
+
+    // Simulator values in degrees, before motion sign changes, scaling or limits.
+    bool simulatorAttitudeAvailable = false;
+    bool simulatorRudderAvailable = false;
+    double simulatorPitchDegrees = 0.0;
+    double simulatorRollDegrees = 0.0;
+    double simulatorRudderDegrees = 0.0;
 
     std::uint64_t sentMessages = 0;
     std::uint64_t receivedMessages = 0;
@@ -51,14 +58,16 @@ public:
     void SetSimulatorConnected(bool connected);
     void SetTcpListening(bool listening);
     void SetClientConnected(bool connected);
-    void UpdateFeedback(const std::array<float, 6>& positions);
+    void UpdateFeedback(const ActuatorValues& positions);
+    void UpdateSimulatorAttitude(double pitchDegrees, double rollDegrees);
+    void UpdateSimulatorRudder(double rudderDegrees);
     void UpdateOrientation(double pitchDegrees, double rollDegrees, double yawDegrees);
     void UpdateMotion(
         double pitchDegrees,
         double rollDegrees,
         double yawDegrees,
-        const std::array<float, 6>& targetPositions,
-        const std::array<float, 6>& speeds);
+        const ActuatorValues& targetPositions,
+        const ActuatorValues& speeds);
     void RecordCommandSent();
     void AddEvent(const std::string& message, DashboardEventLevel level = DashboardEventLevel::Info);
 

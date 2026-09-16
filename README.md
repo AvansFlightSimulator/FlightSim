@@ -56,9 +56,14 @@ The HMI opens as soon as the executable starts; a PLC connection is not required
 
 - Microsoft Flight Simulator/SimConnect and PLC/Unity connection state.
 - Live receive/transmit counters and feedback freshness.
-- A six-leg Stewart-platform visualization driven by pitch, roll, yaw, and actuator feedback.
+- Three split cards below the orbit view compare simulator and platform angles in degrees: `MSFS` on the left shows raw simulator values; `TARGET` on the right shows the processed platform attitude after motion sign changes, halving, and clamping. Cards are labeled `PITCH`, `ROLL`, and `RUDDER / YAW`: the third compares simulator rudder deflection with the derived platform yaw, not aircraft heading. Targets are calculated angles, not measured platform orientation.
+- A six-leg Stewart-platform orbit visualization driven by pitch, roll, yaw, and actuator feedback, with individual base mounting points and no filled base plate.
 - Current position, commanded target, and commanded speed for all six actuators.
-- Recent startup, connection, limit, and shutdown messages that also provide the operational context previously available only in the console.
+- Recent startup, connection, feedback rejection, error, and shutdown messages that also provide the operational context previously available only in the console. Attitude scaling and clamping do not emit warnings; their results remain visible in the raw/target cards.
+
+The window title is "Flight Simulator Motion HMI". In the platform view, drag with the left mouse button to orbit, use the mouse wheel to zoom, and double-click to reset the camera. These controls affect only the view; the drawing is illustrative, not a physical geometry measurement.
+
+Both sides of the cards update without a PLC/Unity client or position feedback. Pitch, roll, and platform targets update on the existing nominal 20 Hz calculation schedule; raw rudder updates when its separate SimConnect message arrives. Cards show placeholders until their required samples arrive and after SimConnect disconnects, including while waiting for new samples on reconnect. The orbit view continues to use the existing processed platform attitude shown in the target column. No barrel-roll return curve has been implemented.
 
 Closing the HMI performs the same orderly worker, socket, and SimConnect shutdown as closing the application. If MSFS is not running at startup, the bridge keeps the HMI available and retries SimConnect every five seconds.
 
@@ -87,7 +92,9 @@ ctest --test-dir build --output-on-failure
 ## Manual validation checklist
 
 - Build Debug x64 and Release x64 on Windows.
+- Verify the English window title, orbit dragging (including releasing outside the view), wheel zoom limits, double-click reset, and resizing without the platform overlapping the attitude section.
 - Start and stop MSFS/SimConnect cleanly.
+- With MSFS 2020 connected and no PLC/Unity client, verify raw pitch, roll, and rudder cards update. Roll through inverted and confirm values beyond +/-30 degrees remain visible. Check placeholders on simulator disconnect and until fresh samples arrive after reconnect.
 - Connect, disconnect, and reconnect the selected PLC or Unity client.
 - Confirm an exact 20 Hz newline-delimited command stream.
 - Send fragmented and combined feedback messages and verify all six positions.

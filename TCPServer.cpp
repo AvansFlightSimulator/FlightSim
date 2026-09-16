@@ -5,12 +5,9 @@
 
 #include <Mstcpip.h>
 #include <iostream>
-#include <nlohmann/json.hpp>
 #include <sstream>
 
 namespace {
-constexpr std::size_t MaximumBufferedMessageSize = 64 * 1024;
-
 void AddSocketError(DashboardModel* dashboard, const std::string& message, int errorCode) {
     if (!dashboard) {
         return;
@@ -20,8 +17,6 @@ void AddSocketError(DashboardModel* dashboard, const std::string& message, int e
     dashboard->AddEvent(event.str(), DashboardEventLevel::Error);
 }
 }
-
-constexpr std::size_t TCPServer::ActuatorCount;
 
 TCPServer::TCPServer(const std::string& serverIp, int serverPort, DashboardModel* dashboard)
     : serverSocket_(INVALID_SOCKET), clientSocket_(INVALID_SOCKET), dashboard_(dashboard) {
@@ -133,7 +128,7 @@ bool TCPServer::startListening() {
         return false;
     }
 
-    receiveBuffer_.clear();
+    feedbackStream_.Clear();
     enableKeepAlive(acceptedSocket, 20000, 1000);
     if (dashboard_) {
         dashboard_->SetClientConnected(true);
@@ -205,7 +200,7 @@ bool TCPServer::sendData(const std::string& data) {
         }
 
         std::size_t sentBytes = 0;
-        while (socket != INVALID_SOCKET && sentBytes < framedMessage.size()) {
+        while (sentBytes < framedMessage.size()) {
             const int result = send(
                 socket,
                 framedMessage.data() + sentBytes,
@@ -255,89 +250,46 @@ bool TCPServer::receiveData() {
         return false;
     }
 
-    receiveBuffer_.append(buffer, static_cast<std::size_t>(bytesReceived));
-
-    std::size_t delimiter = receiveBuffer_.find('\n');
-    while (delimiter != std::string::npos) {
-        std::string message = receiveBuffer_.substr(0, delimiter);
-        receiveBuffer_.erase(0, delimiter + 1);
-        if (!message.empty() && message.back() == '\r') {
-            message.pop_back();
-        }
-        if (!message.empty()) {
-            processMessage(message);
-        }
-        delimiter = receiveBuffer_.find('\n');
+    const auto batch = feedbackStream_.Append(buffer, static_cast<std::size_t>(bytesReceived));
+    for (const auto& message : batch.messages) {
+        processMessage(message);
     }
-
-    // Backward compatibility for clients that send one complete JSON object
-    // without a newline. Fragmented objects stay buffered until complete.
-    if (!receiveBuffer_.empty()) {
-        const nlohmann::json candidate = nlohmann::json::parse(receiveBuffer_, nullptr, false);
-        if (!candidate.is_discarded()) {
-            processMessage(receiveBuffer_);
-            receiveBuffer_.clear();
-        }
-    }
-
-    if (receiveBuffer_.size() > MaximumBufferedMessageSize) {
+    if (batch.oversizedRemainderDiscarded) {
         std::cerr << "Incoming message exceeded 64 KiB and was discarded." << std::endl;
         if (dashboard_) {
             dashboard_->AddEvent("Oversized feedback message discarded", DashboardEventLevel::Warning);
         }
-        receiveBuffer_.clear();
     }
 
     return true;
 }
 
 void TCPServer::processMessage(const std::string& message) {
-    try {
-        const nlohmann::json received = nlohmann::json::parse(message);
-        const auto positionsIterator = received.find("currentPositions");
-        if (positionsIterator == received.end() || !positionsIterator->is_array()
-            || positionsIterator->size() != ActuatorCount) {
-            std::cerr << "Feedback must contain exactly six 'currentPositions' values." << std::endl;
-            if (dashboard_) {
-                dashboard_->AddEvent("Feedback rejected: expected six positions", DashboardEventLevel::Warning);
-            }
-            return;
-        }
-
-        std::array<float, ActuatorCount> updatedPositions{};
-        for (std::size_t index = 0; index < ActuatorCount; ++index) {
-            if (!(*positionsIterator)[index].is_number()) {
-                std::cerr << "Every 'currentPositions' value must be numeric." << std::endl;
-                if (dashboard_) {
-                    dashboard_->AddEvent("Feedback rejected: position is not numeric", DashboardEventLevel::Warning);
-                }
-                return;
-            }
-            updatedPositions[index] = (*positionsIterator)[index].get<float>();
-        }
-
-        {
-            std::lock_guard<std::mutex> lock(positionsMutex_);
-            currentPositions_ = updatedPositions;
-        }
+    ActuatorValues updatedPositions{};
+    std::string error;
+    if (!TryParseFeedback(message, updatedPositions, error)) {
+        std::cerr << error << std::endl;
         if (dashboard_) {
-            dashboard_->UpdateFeedback(updatedPositions);
+            dashboard_->AddEvent(error, DashboardEventLevel::Warning);
         }
-        const bool firstFeedback = !hasPositionFeedback_.exchange(true);
-        if (firstFeedback) {
-            std::cout << "[TCP] Position feedback received; actuator output enabled." << std::endl;
-            if (dashboard_) {
-                dashboard_->AddEvent("Position feedback valid; output enabled");
-            }
-        }
-        LogProtocolMessage("RECV", message);
+        return;
     }
-    catch (const nlohmann::json::exception& exception) {
-        std::cerr << "Failed to parse feedback JSON: " << exception.what() << std::endl;
+
+    {
+        std::lock_guard<std::mutex> lock(positionsMutex_);
+        currentPositions_ = updatedPositions;
+    }
+    if (dashboard_) {
+        dashboard_->UpdateFeedback(updatedPositions);
+    }
+    const bool firstFeedback = !hasPositionFeedback_.exchange(true);
+    if (firstFeedback) {
+        std::cout << "[TCP] Position feedback received; actuator output enabled." << std::endl;
         if (dashboard_) {
-            dashboard_->AddEvent("Feedback JSON could not be parsed", DashboardEventLevel::Warning);
+            dashboard_->AddEvent("Position feedback valid; output enabled");
         }
     }
+    LogProtocolMessage("RECV", message);
 }
 
 bool TCPServer::isConnected() const noexcept {
@@ -348,7 +300,7 @@ bool TCPServer::hasPositionFeedback() const noexcept {
     return hasPositionFeedback_;
 }
 
-std::array<float, TCPServer::ActuatorCount> TCPServer::getCurrentPositions() const {
+ActuatorValues TCPServer::getCurrentPositions() const {
     std::lock_guard<std::mutex> lock(positionsMutex_);
     return currentPositions_;
 }

@@ -1,7 +1,5 @@
 #include "DashboardModel.h"
 
-#include <algorithm>
-
 namespace {
 constexpr std::size_t MaximumDashboardEvents = 80;
 }
@@ -13,6 +11,10 @@ DashboardModel::DashboardModel()
 void DashboardModel::SetSimulatorConnected(bool connected) {
     std::lock_guard<std::mutex> lock(mutex_);
     state_.simulatorConnected = connected;
+    if (!connected) {
+        state_.simulatorAttitudeAvailable = false;
+        state_.simulatorRudderAvailable = false;
+    }
 }
 
 void DashboardModel::SetTcpListening(bool listening) {
@@ -28,12 +30,25 @@ void DashboardModel::SetClientConnected(bool connected) {
     }
 }
 
-void DashboardModel::UpdateFeedback(const std::array<float, 6>& positions) {
+void DashboardModel::UpdateFeedback(const ActuatorValues& positions) {
     std::lock_guard<std::mutex> lock(mutex_);
     state_.currentPositions = positions;
     state_.positionFeedback = true;
     ++state_.receivedMessages;
     state_.lastFeedbackMilliseconds = ElapsedMilliseconds();
+}
+
+void DashboardModel::UpdateSimulatorAttitude(double pitchDegrees, double rollDegrees) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    state_.simulatorPitchDegrees = pitchDegrees;
+    state_.simulatorRollDegrees = rollDegrees;
+    state_.simulatorAttitudeAvailable = true;
+}
+
+void DashboardModel::UpdateSimulatorRudder(double rudderDegrees) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    state_.simulatorRudderDegrees = rudderDegrees;
+    state_.simulatorRudderAvailable = true;
 }
 
 void DashboardModel::UpdateOrientation(
@@ -51,8 +66,8 @@ void DashboardModel::UpdateMotion(
     double pitchDegrees,
     double rollDegrees,
     double yawDegrees,
-    const std::array<float, 6>& targetPositions,
-    const std::array<float, 6>& speeds) {
+    const ActuatorValues& targetPositions,
+    const ActuatorValues& speeds) {
     std::lock_guard<std::mutex> lock(mutex_);
     state_.pitchDegrees = pitchDegrees;
     state_.rollDegrees = rollDegrees;

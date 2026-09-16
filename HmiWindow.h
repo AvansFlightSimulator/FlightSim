@@ -43,4 +43,10 @@ private:
     HFONT bodyFont_ = nullptr;
     HFONT valueFont_ = nullptr;
     HFONT smallFont_ = nullptr;
+    RECT diagramBounds_{};
+    POINT orbitMouse_{};
+    bool orbitDragging_ = false;
+    double orbitAzimuth_ = 35.0;
+    double orbitElevation_ = 25.0;
+    double orbitZoom_ = 1.0;
 };

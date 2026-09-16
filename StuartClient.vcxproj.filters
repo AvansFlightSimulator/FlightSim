@@ -15,6 +15,12 @@
     </Filter>
   </ItemGroup>
   <ItemGroup>
+    <ClCompile Include="MotionCalculator.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="ControllerProtocol.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="SimConnectHandler.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -38,6 +44,15 @@
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="BridgeTypes.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="MotionCalculator.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="ControllerProtocol.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="SimConnectHandler.h">
       <Filter>Header Files</Filter>
     </ClInclude>

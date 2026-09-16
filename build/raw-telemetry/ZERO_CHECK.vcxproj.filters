@@ -1,0 +1,13 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="17.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <CustomBuild Include="C:\Users\User\Documents\Repos\FlightSim\build\raw-telemetry\CMakeFiles\774884f6c681bce15d9375678d89c24e\generate.stamp.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="CMake Rules">
+      <UniqueIdentifier>{2FE3C457-9130-3C8D-9F53-BA0B04981A5F}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+</Project>

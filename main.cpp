@@ -2,6 +2,7 @@
 #include "DashboardModel.h"
 #include "HmiWindow.h"
 #include "ProtocolLogger.h"
+#include "MotionCalculator.h"
 #include "SimConnectHandler.h"
 #include "TCPServer.h"
 
@@ -15,7 +16,7 @@
 #include <thread>
 
 namespace {
-constexpr auto OutputInterval = std::chrono::milliseconds(50);
+constexpr auto OutputInterval = MotionSettings::ControlInterval;
 constexpr auto SimConnectRetryInterval = std::chrono::seconds(5);
 
 void PrintStartupBanner() {
@@ -25,8 +26,8 @@ void PrintStartupBanner() {
         << "----------------------------------------\n"
         << " Target     : " << ACTIVE_TARGET_NAME << '\n'
         << " Endpoint   : " << ACTIVE_BIND_IP << ':' << ACTIVE_PORT << '\n'
-        << " Actuators  : " << TCPServer::ActuatorCount << '\n'
-        << " Output rate: 20 Hz\n"
+        << " Actuators  : " << ActuatorCount << '\n'
+        << " Output rate: " << MotionSettings::ControlRateHz << " Hz\n"
         << "========================================\n";
 }
 
@@ -70,6 +71,7 @@ void OutputThreadMethod(
     while (!stopRequested) {
         nextWakeup += OutputInterval;
 
+        // This gate requires a first valid sample, not a feedback-age watchdog.
         if (server.isConnected()
             && server.hasPositionFeedback()
             && simulator.TryGetLatestPayload(payload)) {
@@ -106,6 +108,8 @@ int main() {
     TCPServer server(ACTIVE_BIND_IP, ACTIVE_PORT, &dashboard);
     SimConnectHandler simulator(server, &dashboard);
     std::atomic<bool> stopRequested{ false };
+    // Blocking accept/receive and send use separate workers so the HMI and
+    // SimConnect dispatch remain responsive on this main thread.
     std::thread feedbackThread(FeedbackThreadMethod, std::ref(server), std::cref(stopRequested));
     std::thread outputThread(
         OutputThreadMethod,
@@ -121,22 +125,16 @@ int main() {
 
     while (!simulator.QuitRequested() && ProcessWindowsMessages()) {
         const auto now = std::chrono::steady_clock::now();
-        if (hSimConnect == nullptr && now >= nextSimConnectAttempt) {
+        if (!simulator.IsConnected() && now >= nextSimConnectAttempt) {
             simulator.InitializeSimConnect();
             nextSimConnectAttempt = now + SimConnectRetryInterval;
         }
 
-        if (hSimConnect != nullptr) {
-            const HRESULT dispatchResult = SimConnect_CallDispatch(
-                hSimConnect,
-                SimConnectHandler::MyDispatchProcRD,
-                &simulator);
-            if (FAILED(dispatchResult)) {
-                std::cerr << "[SIM] Dispatch failed; reconnecting." << std::endl;
-                dashboard.AddEvent("SimConnect dispatch failed; reconnecting", DashboardEventLevel::Warning);
-                simulator.CloseSimConnect();
-                nextSimConnectAttempt = now + SimConnectRetryInterval;
-            }
+        if (simulator.IsConnected() && !simulator.Dispatch()) {
+            std::cerr << "[SIM] Dispatch failed; reconnecting." << std::endl;
+            dashboard.AddEvent("SimConnect dispatch failed; reconnecting", DashboardEventLevel::Warning);
+            simulator.CloseSimConnect();
+            nextSimConnectAttempt = now + SimConnectRetryInterval;
         }
         Sleep(5);
     }
@@ -144,6 +142,8 @@ int main() {
     std::cout << "[APP] Shutting down..." << std::endl;
     dashboard.AddEvent("Application shutdown requested");
     stopRequested = true;
+    // Closing sockets interrupts blocking network calls before we join workers.
+    // The server and simulator must outlive both workers.
     server.closeConnection();
 
     if (outputThread.joinable()) {

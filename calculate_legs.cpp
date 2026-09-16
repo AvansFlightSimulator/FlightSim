@@ -1,13 +1,16 @@
 #include "calculate_legs.h"
 
-#ifndef M_PI
-#define M_PI 3.14159265358979323846
-#endif
+#include <cmath>
+
+namespace {
+constexpr float Pi = 3.14159265358979323846f;
 
 // Convert angles to radians
 vec rad(float psi, float theta, float phi) {
-    vec rad{ psi * ((float)M_PI / 180.0f), theta * ((float)M_PI / 180.0f), phi * ((float)M_PI / 180.0f) };
+    vec rad{ psi * (Pi / 180.0f), theta * (Pi / 180.0f), phi * (Pi / 180.0f) };
     return rad;
+}
+
 }
 
 vec vec::operator+(const vec& other) const {
@@ -26,11 +29,11 @@ vec vec::operator-(const vec& other) const {
     return result;
 }
 
-float vec::magnitude() {
+float vec::magnitude() const {
     return std::sqrt(x * x + y * y + z * z);
 }
 
-vec dot_product(std::array<std::array<float, 3>, 3>& matrix, const vec& v) {
+vec dot_product(const std::array<std::array<float, 3>, 3>& matrix, const vec& v) {
     vec result;
     result.x = matrix[0][0] * v.x + matrix[0][1] * v.y + matrix[0][2] * v.z;
     result.y = matrix[1][0] * v.x + matrix[1][1] * v.y + matrix[1][2] * v.z;
@@ -66,7 +69,7 @@ std::array<std::array<float, 3>, 3> rotation_matrix(float psi, float theta, floa
 }
 
 // Function to compute l_i
-vec compute_li_vector(vec& T, float psi, float theta, float phi, vec& p_i, vec& b_i) {
+vec compute_li_vector(const vec& T, float psi, float theta, float phi, const vec& p_i, const vec& b_i) {
     std::array<std::array<float, 3>, 3> PRB = rotation_matrix(psi, theta, phi);
     // Compute l_i as T + PRB * p_i - b_i
     vec l_i = T + dot_product(PRB, p_i) - b_i;
@@ -74,7 +77,7 @@ vec compute_li_vector(vec& T, float psi, float theta, float phi, vec& p_i, vec& 
 }
 
 // Function to compute the length of l_i
-float compute_li_length(vec& T, float psi, float theta, float phi, vec& p_i, vec& b_i) {
+float compute_li_length(const vec& T, float psi, float theta, float phi, const vec& p_i, const vec& b_i) {
     vec l_i = compute_li_vector(T, psi, theta, phi, p_i, b_i);
     return l_i.magnitude();
 }

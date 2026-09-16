@@ -5,6 +5,39 @@
 #include <iostream>
 
 int main() {
+    // Raw simulator telemetry must work without a client and survive motion updates.
+    DashboardModel rawModel;
+    assert(!rawModel.GetSnapshot().simulatorAttitudeAvailable);
+    assert(!rawModel.GetSnapshot().simulatorRudderAvailable);
+    rawModel.SetSimulatorConnected(true);
+    rawModel.UpdateSimulatorRudder(-12.5);
+    assert(!rawModel.GetSnapshot().simulatorAttitudeAvailable);
+    const double rollSamples[] = { 0.0, -60.0, -80.0, -179.9, 179.9, 80.0, 60.0, 0.0 };
+    const std::array<float, 6> noMotion{};
+    for (double roll : rollSamples) {
+        rawModel.UpdateSimulatorAttitude(-45.0, roll);
+        rawModel.UpdateOrientation(22.5, 30.0, 6.25);
+        rawModel.UpdateMotion(22.5, 30.0, 6.25, noMotion, noMotion);
+        const DashboardSnapshot raw = rawModel.GetSnapshot();
+        assert(!raw.clientConnected && !raw.positionFeedback);
+        assert(raw.simulatorAttitudeAvailable && raw.simulatorRudderAvailable);
+        assert(raw.simulatorPitchDegrees == -45.0);
+        assert(raw.simulatorRollDegrees == roll);
+        assert(raw.simulatorRudderDegrees == -12.5);
+        assert(raw.pitchDegrees == 22.5 && raw.rollDegrees == 30.0 && raw.yawDegrees == 6.25);
+    }
+    rawModel.SetSimulatorConnected(false);
+    assert(!rawModel.GetSnapshot().simulatorAttitudeAvailable);
+    assert(!rawModel.GetSnapshot().simulatorRudderAvailable);
+    rawModel.SetSimulatorConnected(true);
+    assert(!rawModel.GetSnapshot().simulatorAttitudeAvailable);
+    assert(!rawModel.GetSnapshot().simulatorRudderAvailable);
+    rawModel.UpdateSimulatorAttitude(10.0, -90.0);
+    assert(rawModel.GetSnapshot().simulatorAttitudeAvailable);
+    assert(!rawModel.GetSnapshot().simulatorRudderAvailable);
+    rawModel.UpdateSimulatorRudder(2.0);
+    assert(rawModel.GetSnapshot().simulatorRudderAvailable);
+
     DashboardModel model;
     model.SetTcpListening(true);
     model.SetClientConnected(true);

@@ -1,6 +1,9 @@
 #include "HmiWindow.h"
 
 #include "DashboardModel.h"
+#include "calculate_legs.h"
+
+#include <windowsx.h>
 
 #include <algorithm>
 #include <array>
@@ -205,10 +208,10 @@ HmiWindow::~HmiWindow() {
 }
 
 bool HmiWindow::Create(HINSTANCE instance, int showCommand) {
-    const char* className = "FlightMotionHmiWindow";
-    WNDCLASSEXA windowClass{};
+    const wchar_t* className = L"FlightMotionHmiWindow";
+    WNDCLASSEXW windowClass{};
     windowClass.cbSize = sizeof(windowClass);
-    windowClass.style = CS_HREDRAW | CS_VREDRAW;
+    windowClass.style = CS_HREDRAW | CS_VREDRAW | CS_DBLCLKS;
     windowClass.lpfnWndProc = WindowProcedure;
     windowClass.hInstance = instance;
     windowClass.hCursor = LoadCursor(nullptr, IDC_ARROW);
@@ -216,15 +219,15 @@ bool HmiWindow::Create(HINSTANCE instance, int showCommand) {
     windowClass.hbrBackground = nullptr;
     windowClass.lpszClassName = className;
 
-    if (!RegisterClassExA(&windowClass) && GetLastError() != ERROR_CLASS_ALREADY_EXISTS) {
+    if (!RegisterClassExW(&windowClass) && GetLastError() != ERROR_CLASS_ALREADY_EXISTS) {
         return false;
     }
 
     CreateFonts();
-    window_ = CreateWindowExA(
+    window_ = CreateWindowExW(
         0,
         className,
-        "Flight Simulator Motion HMI",
+        L"Flight Simulator Motion HMI",
         WS_OVERLAPPEDWINDOW,
         CW_USEDEFAULT,
         CW_USEDEFAULT,
@@ -256,7 +259,7 @@ LRESULT CALLBACK HmiWindow::WindowProcedure(
     LPARAM lParam) {
     HmiWindow* instance = reinterpret_cast<HmiWindow*>(GetWindowLongPtr(window, GWLP_USERDATA));
     if (message == WM_NCCREATE) {
-        const auto* create = reinterpret_cast<const CREATESTRUCT*>(lParam);
+        const auto* create = reinterpret_cast<const CREATESTRUCTW*>(lParam);
         instance = static_cast<HmiWindow*>(create->lpCreateParams);
         instance->window_ = window;
         SetWindowLongPtr(window, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(instance));
@@ -264,11 +267,64 @@ LRESULT CALLBACK HmiWindow::WindowProcedure(
     if (instance != nullptr) {
         return instance->HandleMessage(message, wParam, lParam);
     }
-    return DefWindowProc(window, message, wParam, lParam);
+    return DefWindowProcW(window, message, wParam, lParam);
 }
 
 LRESULT HmiWindow::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
     switch (message) {
+    case WM_LBUTTONDOWN: {
+        const POINT mouse{ GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+        if (PtInRect(&diagramBounds_, mouse)) {
+            orbitMouse_ = mouse;
+            orbitDragging_ = true;
+            SetCapture(window_);
+        }
+        return 0;
+    }
+    case WM_MOUSEMOVE:
+        if (orbitDragging_) {
+            const POINT mouse{ GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+            orbitAzimuth_ = std::fmod(orbitAzimuth_ + (mouse.x - orbitMouse_.x) * 0.5, 360.0);
+            orbitElevation_ = (std::max)(-80.0, (std::min)(80.0,
+                orbitElevation_ + (mouse.y - orbitMouse_.y) * 0.5));
+            orbitMouse_ = mouse;
+            InvalidateRect(window_, &diagramBounds_, FALSE);
+        }
+        return 0;
+    case WM_LBUTTONUP:
+    case WM_CANCELMODE:
+        orbitDragging_ = false;
+        if (GetCapture() == window_) {
+            ReleaseCapture();
+        }
+        return 0;
+    case WM_CAPTURECHANGED:
+        orbitDragging_ = false;
+        return 0;
+    case WM_MOUSEWHEEL: {
+        POINT mouse{ GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+        ScreenToClient(window_, &mouse);
+        if (PtInRect(&diagramBounds_, mouse)) {
+            orbitZoom_ = (std::max)(0.5, (std::min)(2.0, orbitZoom_
+                * std::pow(1.1, GET_WHEEL_DELTA_WPARAM(wParam) / static_cast<double>(WHEEL_DELTA))));
+            InvalidateRect(window_, &diagramBounds_, FALSE);
+        }
+        return 0;
+    }
+    case WM_LBUTTONDBLCLK: {
+        const POINT mouse{ GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+        if (PtInRect(&diagramBounds_, mouse)) {
+            orbitAzimuth_ = 35.0;
+            orbitElevation_ = 25.0;
+            orbitZoom_ = 1.0;
+            InvalidateRect(window_, &diagramBounds_, FALSE);
+        }
+        return 0;
+    }
+    case WM_SIZE:
+        diagramBounds_ = RECT{};
+        InvalidateRect(window_, nullptr, FALSE);
+        return 0;
     case WM_TIMER:
         if (wParam == RefreshTimerId) {
             InvalidateRect(window_, nullptr, FALSE);
@@ -294,7 +350,7 @@ LRESULT HmiWindow::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
         PostQuitMessage(0);
         return 0;
     default:
-        return DefWindowProc(window_, message, wParam, lParam);
+        return DefWindowProcW(window_, message, wParam, lParam);
     }
 }
 
@@ -383,48 +439,99 @@ void HmiWindow::Render(HDC dc, const RECT& client, const DashboardSnapshot& snap
 
     DrawTextValue(dc, headingFont_, "6DOF PLATFORM",
         MakeRect(leftPanel.left + 18, leftPanel.top + 10, leftPanel.right - 18, leftPanel.top + 42), PrimaryText);
-    DrawTextValue(dc, smallFont_, "LIVE ACTUATOR GEOMETRY",
+    DrawTextValue(dc, smallFont_, "ORBIT VIEW  /  Drag: rotate  /  Wheel: zoom  /  Double-click: reset",
         MakeRect(leftPanel.left + 18, leftPanel.top + 36, leftPanel.right - 18, leftPanel.top + 60), SecondaryText);
 
     const int diagramLeft = leftPanel.left + 18;
     const int diagramRight = leftPanel.right - 18;
     const int diagramTop = leftPanel.top + 64;
-    const int diagramBottom = (std::min)(leftPanel.top + 345, leftPanel.bottom - 205);
-    const int centerX = (diagramLeft + diagramRight) / 2;
-    const int baseCenterY = diagramBottom - 40;
-    const int topCenterY = diagramTop + 84;
-    const double yawRadians = snapshot.yawDegrees * Pi / 180.0;
+    const int diagramBottom = (std::min)(leftPanel.top + 345, leftPanel.bottom - 229);
+    diagramBounds_ = MakeRect(diagramLeft, diagramTop, diagramRight, diagramBottom);
+    const int savedDc = SaveDC(dc);
+    IntersectClipRect(dc, diagramLeft, diagramTop, diagramRight, diagramBottom);
+    const double centerX = (diagramLeft + diagramRight) * 0.5;
+    const double centerY = (diagramTop + diagramBottom) * 0.5;
+    const double scale = orbitZoom_ * (std::min)((diagramRight - diagramLeft - 32) / 380.0,
+        (diagramBottom - diagramTop - 32) / 380.0);
+    const double azimuth = orbitAzimuth_ * Pi / 180.0;
+    const double elevation = orbitElevation_ * Pi / 180.0;
 
-    std::array<POINT, 6> basePoints{};
-    std::array<POINT, 6> platformPoints{};
+    struct ProjectedPoint {
+        POINT screen;
+        double depth;
+    };
+    // Orthographic camera orbiting the center of the illustrative platform.
+    // These drawing dimensions do not represent physical actuator geometry.
+    const auto project = [&](const vec& point) -> ProjectedPoint {
+        const double horizontal = std::cos(azimuth) * point.x - std::sin(azimuth) * point.y;
+        const double forward = std::sin(azimuth) * point.x + std::cos(azimuth) * point.y;
+        const double vertical = std::cos(elevation) * point.z - std::sin(elevation) * forward;
+        return { { static_cast<LONG>(std::lround(centerX + horizontal * scale)),
+                   static_cast<LONG>(std::lround(centerY - vertical * scale)) },
+            std::cos(elevation) * forward + std::sin(elevation) * point.z };
+    };
+    auto attitude = rotation_matrix(static_cast<float>(snapshot.yawDegrees),
+        static_cast<float>(-snapshot.rollDegrees), static_cast<float>(snapshot.pitchDegrees));
+    std::array<ProjectedPoint, 6> basePoints{};
+    std::array<ProjectedPoint, 6> platformPoints{};
+    std::array<POINT, 6> platformPolygon{};
+    std::array<double, 7> depths{};
     for (int index = 0; index < 6; ++index) {
         const double angle = (-90.0 + index * 60.0) * Pi / 180.0;
-        basePoints[index].x = centerX + static_cast<LONG>(std::cos(angle) * 150.0);
-        basePoints[index].y = baseCenterY + static_cast<LONG>(std::sin(angle) * 48.0);
-
-        const double platformAngle = angle + yawRadians * 0.35;
-        const double xOffset = std::cos(platformAngle) * 118.0;
-        const double perspectiveY = std::sin(platformAngle) * 38.0;
-        const double attitudeY = (xOffset / 118.0) * snapshot.rollDegrees * 0.7
-            + std::sin(platformAngle) * snapshot.pitchDegrees * 0.7;
-        platformPoints[index].x = centerX + static_cast<LONG>(xOffset);
-        platformPoints[index].y = topCenterY + static_cast<LONG>(perspectiveY + attitudeY);
+        basePoints[index] = project(vec{ static_cast<float>(std::cos(angle) * 150.0),
+            static_cast<float>(std::sin(angle) * 150.0), -80.0f });
+        vec top = dot_product(attitude, vec{ static_cast<float>(std::cos(angle) * 118.0),
+            static_cast<float>(std::sin(angle) * 118.0), 0.0f });
+        top.z += 80.0f;
+        platformPoints[index] = project(top);
+        platformPolygon[index] = platformPoints[index].screen;
+        depths[index] = (basePoints[index].depth + platformPoints[index].depth) * 0.5;
+        depths[6] += platformPoints[index].depth / 6.0;
     }
 
-    for (int index = 0; index < 6; ++index) {
+    // Paint farther parts first so orbiting reveals the nearer legs.
+    std::array<int, 7> drawOrder{ { 0, 1, 2, 3, 4, 5, 6 } };
+    std::stable_sort(drawOrder.begin(), drawOrder.end(), [&](int left, int right) {
+        return depths[left] < depths[right];
+    });
+    for (int index : drawOrder) {
+        if (index == 6) {
+            HBRUSH platformBrush = CreateSolidBrush(RGB(31, 103, 120));
+            HPEN platformPen = CreatePen(PS_SOLID, 2, Cyan);
+            HGDIOBJ oldBrush = SelectObject(dc, platformBrush);
+            HGDIOBJ oldPen = SelectObject(dc, platformPen);
+            Polygon(dc, platformPolygon.data(), static_cast<int>(platformPolygon.size()));
+            SelectObject(dc, oldPen);
+            SelectObject(dc, oldBrush);
+            DeleteObject(platformPen);
+            DeleteObject(platformBrush);
+            continue;
+        }
+        const POINT& base = basePoints[index].screen;
+        const POINT& top = platformPoints[index].screen;
         const float position = snapshot.currentPositions[index];
         const int thickness = snapshot.positionFeedback
             ? 3 + static_cast<int>((std::max)(0.0f, (std::min)(4.0f, position / 100.0f)))
             : 3;
         HPEN legPen = CreatePen(PS_SOLID, thickness, snapshot.positionFeedback ? Cyan : RGB(74, 89, 103));
         HGDIOBJ previousPen = SelectObject(dc, legPen);
-        MoveToEx(dc, basePoints[index].x, basePoints[index].y, nullptr);
-        LineTo(dc, platformPoints[index].x, platformPoints[index].y);
+        MoveToEx(dc, base.x, base.y, nullptr);
+        LineTo(dc, top.x, top.y);
         SelectObject(dc, previousPen);
         DeleteObject(legPen);
 
-        const int labelX = (basePoints[index].x + platformPoints[index].x) / 2;
-        const int labelY = (basePoints[index].y + platformPoints[index].y) / 2;
+        HBRUSH mountBrush = CreateSolidBrush(SecondaryText);
+        HGDIOBJ oldBrush = SelectObject(dc, mountBrush);
+        HGDIOBJ oldPen = SelectObject(dc, GetStockObject(NULL_PEN));
+        Ellipse(dc, base.x - 4, base.y - 4, base.x + 4, base.y + 4);
+        SelectObject(dc, oldPen);
+        SelectObject(dc, oldBrush);
+        DeleteObject(mountBrush);
+    }
+
+    for (int index = 0; index < 6; ++index) {
+        const int labelX = (basePoints[index].screen.x + platformPoints[index].screen.x) / 2;
+        const int labelY = (basePoints[index].screen.y + platformPoints[index].screen.y) / 2;
         RECT labelRect = MakeRect(labelX - 12, labelY - 11, labelX + 12, labelY + 11);
         HBRUSH labelBrush = CreateSolidBrush(PanelRaised);
         HGDIOBJ oldBrush = SelectObject(dc, labelBrush);
@@ -437,42 +544,41 @@ void HmiWindow::Render(HDC dc, const RECT& client, const DashboardSnapshot& snap
             DT_CENTER | DT_SINGLELINE | DT_VCENTER);
     }
 
-    HBRUSH baseBrush = CreateSolidBrush(RGB(44, 59, 74));
-    HPEN basePen = CreatePen(PS_SOLID, 2, RGB(91, 112, 130));
-    HGDIOBJ oldBrush = SelectObject(dc, baseBrush);
-    HGDIOBJ oldPen = SelectObject(dc, basePen);
-    Polygon(dc, basePoints.data(), static_cast<int>(basePoints.size()));
-    SelectObject(dc, oldPen);
-    SelectObject(dc, oldBrush);
-    DeleteObject(basePen);
-    DeleteObject(baseBrush);
-
-    HBRUSH platformBrush = CreateSolidBrush(RGB(31, 103, 120));
-    HPEN platformPen = CreatePen(PS_SOLID, 2, Cyan);
-    oldBrush = SelectObject(dc, platformBrush);
-    oldPen = SelectObject(dc, platformPen);
-    Polygon(dc, platformPoints.data(), static_cast<int>(platformPoints.size()));
-    SelectObject(dc, oldPen);
-    SelectObject(dc, oldBrush);
-    DeleteObject(platformPen);
-    DeleteObject(platformBrush);
+    RestoreDC(dc, savedDc);
 
     const int poseTop = diagramBottom + 8;
-    DrawTextValue(dc, smallFont_, "AIRCRAFT ATTITUDE",
+    DrawTextValue(dc, smallFont_, "MSFS / PLATFORM TARGET (DEGREES)",
         MakeRect(leftPanel.left + 18, poseTop, leftPanel.right - 18, poseTop + 24), SecondaryText);
     const int poseWidth = (leftPanel.right - leftPanel.left - 52) / 3;
-    const char* poseLabels[] = { "PITCH", "ROLL", "YAW" };
-    const double poseValues[] = { snapshot.pitchDegrees, snapshot.rollDegrees, snapshot.yawDegrees };
+    const char* poseLabels[] = { "PITCH", "ROLL", "RUDDER / YAW" };
+    const double poseValues[] = {
+        snapshot.simulatorPitchDegrees, snapshot.simulatorRollDegrees, snapshot.simulatorRudderDegrees
+    };
+    const bool poseAvailable[] = {
+        snapshot.simulatorAttitudeAvailable, snapshot.simulatorAttitudeAvailable, snapshot.simulatorRudderAvailable
+    };
+    const double platformValues[] = { snapshot.pitchDegrees, snapshot.rollDegrees, snapshot.yawDegrees };
     for (int index = 0; index < 3; ++index) {
         const int x = leftPanel.left + 18 + index * (poseWidth + 8);
-        RECT poseRect = MakeRect(x, poseTop + 25, x + poseWidth, poseTop + 83);
+        RECT poseRect = MakeRect(x, poseTop + 25, x + poseWidth, poseTop + 107);
         FillRoundedRectangle(dc, poseRect, PanelRaised, Border);
         DrawTextValue(dc, smallFont_, poseLabels[index], MakeRect(x + 10, poseRect.top + 3, poseRect.right - 8, poseRect.top + 23), SecondaryText);
-        DrawTextValue(dc, valueFont_, snapshot.motionAvailable ? FormatNumber(poseValues[index], 1) + " deg" : "--.- deg",
-            MakeRect(x + 10, poseRect.top + 22, poseRect.right - 8, poseRect.bottom - 3), PrimaryText);
+        const int middle = x + poseWidth / 2;
+        FillRectangle(dc, MakeRect(middle, poseRect.top + 26, middle + 1, poseRect.bottom - 8), Border);
+        const UINT centered = DT_CENTER | DT_SINGLELINE | DT_VCENTER;
+        DrawTextValue(dc, smallFont_, "MSFS",
+            MakeRect(x + 6, poseRect.top + 25, middle - 6, poseRect.top + 44), SecondaryText, centered);
+        DrawTextValue(dc, smallFont_, "TARGET",
+            MakeRect(middle + 6, poseRect.top + 25, poseRect.right - 6, poseRect.top + 44), Cyan, centered);
+        const bool rawAvailable = snapshot.simulatorConnected && poseAvailable[index];
+        const bool targetAvailable = rawAvailable && snapshot.simulatorAttitudeAvailable && snapshot.motionAvailable;
+        DrawTextValue(dc, valueFont_, rawAvailable ? FormatNumber(poseValues[index], 1) : "--.-",
+            MakeRect(x + 6, poseRect.top + 44, middle - 6, poseRect.bottom - 6), PrimaryText, centered);
+        DrawTextValue(dc, valueFont_, targetAvailable ? FormatNumber(platformValues[index], 1) : "--.-",
+            MakeRect(middle + 6, poseRect.top + 44, poseRect.right - 6, poseRect.bottom - 6), Cyan, centered);
     }
 
-    const int activityTop = poseTop + 96;
+    const int activityTop = poseTop + 120;
     if (activityTop < leftPanel.bottom - 38) {
         DrawTextValue(dc, smallFont_, "SYSTEM ACTIVITY",
             MakeRect(leftPanel.left + 18, activityTop, leftPanel.right - 18, activityTop + 22), SecondaryText);

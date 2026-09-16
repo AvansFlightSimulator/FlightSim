@@ -1,0 +1,10 @@
+C:/Users/User/Documents/Repos/FlightSim/build/raw-telemetry/CMakeFiles/FlightSim.dir
+C:/Users/User/Documents/Repos/FlightSim/build/raw-telemetry/CMakeFiles/Experimental.dir
+C:/Users/User/Documents/Repos/FlightSim/build/raw-telemetry/CMakeFiles/Nightly.dir
+C:/Users/User/Documents/Repos/FlightSim/build/raw-telemetry/CMakeFiles/Continuous.dir
+C:/Users/User/Documents/Repos/FlightSim/build/raw-telemetry/CMakeFiles/NightlyMemoryCheck.dir
+C:/Users/User/Documents/Repos/FlightSim/build/raw-telemetry/CMakeFiles/calculate_legs_tests.dir
+C:/Users/User/Documents/Repos/FlightSim/build/raw-telemetry/CMakeFiles/dashboard_model_tests.dir
+C:/Users/User/Documents/Repos/FlightSim/build/raw-telemetry/CMakeFiles/RUN_TESTS.dir
+C:/Users/User/Documents/Repos/FlightSim/build/raw-telemetry/CMakeFiles/ALL_BUILD.dir
+C:/Users/User/Documents/Repos/FlightSim/build/raw-telemetry/CMakeFiles/ZERO_CHECK.dir
