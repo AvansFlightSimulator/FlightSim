@@ -9,18 +9,18 @@
 #include <utility>
 
 namespace {
-// These layouts and field order must match the SDK data definitions below.
-struct AircraftOrientation {
-    double pitch;
-    double bank;
-};
+    // These layouts and field order must match the SDK data definitions below.
+    struct AircraftOrientation {
+        double pitch;
+        double bank;
+    };
 
-struct RudderData {
-    double deflection;
-};
+    struct RudderData {
+        double deflection;
+    };
 
-enum DataDefinitionId { DEFINITION_ORIENTATION, DEFINITION_RUDDER };
-enum DataRequestId { REQUEST_ORIENTATION, REQUEST_RUDDER };
+    enum DataDefinitionId { DEFINITION_ORIENTATION, DEFINITION_RUDDER };
+    enum DataRequestId { REQUEST_ORIENTATION, REQUEST_RUDDER };
 }
 
 SimConnectHandler::SimConnectHandler(TCPServer& server, DashboardModel* dashboard)
@@ -42,10 +42,7 @@ bool SimConnectHandler::Dispatch() {
         && SUCCEEDED(SimConnect_CallDispatch(connection_, DispatchCallback, this));
 }
 
-void CALLBACK SimConnectHandler::DispatchCallback(
-    SIMCONNECT_RECV* data,
-    DWORD dataSize,
-    void* context) {
+void CALLBACK SimConnectHandler::DispatchCallback(SIMCONNECT_RECV* data, DWORD dataSize, void* context) {
     (void)dataSize;
     if (context != nullptr) {
         static_cast<SimConnectHandler*>(context)->HandleDispatch(data);
