@@ -16,7 +16,6 @@ constexpr double MaximumYawDegrees = 30.0;
 constexpr float SpeedLimit = 500.0f;
 constexpr float MinimumSpeed = 2.0f;
 constexpr float MaximumStepPerSecond = 400.0f;
-constexpr float PositionDeadzone = 0.0f;
 constexpr float BaseLegLength = 1156.372420286821f;
 constexpr float NeutralActuatorPosition = 200.0f;
 
@@ -69,7 +68,8 @@ MotionCommand CalculateMotion(
     MotionCommand command;
     command.attitude = attitude;
 
-    // Every leg uses the same rotation; calculate its trigonometry once per pose.
+    // Preserve the established geometry mapping: yaw about Z, negative platform
+    // roll about Y, and platform pitch about X. Every leg shares this rotation.
     const auto rotation = rotation_matrix(
         static_cast<float>(attitude.yawDegrees),
         static_cast<float>(-attitude.rollDegrees),
@@ -87,14 +87,10 @@ MotionCommand CalculateMotion(
         command.positions[index] = currentPositions[index] + limitedDelta;
 
         const float distance = std::fabs(limitedDelta);
-        if (distance <= PositionDeadzone) {
-            command.speeds[index] = MinimumSpeed;
-        }
-        else {
-            command.speeds[index] = (std::max)(
-                MinimumSpeed,
-                (std::min)(distance / controlStepSeconds, SpeedLimit));
-        }
+        // Even a stationary actuator retains the existing minimum speed command.
+        command.speeds[index] = (std::max)(
+            MinimumSpeed,
+            (std::min)(distance / controlStepSeconds, SpeedLimit));
     }
 
     return command;

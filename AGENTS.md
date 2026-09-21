@@ -47,13 +47,18 @@ platform yaw; the bridge does not subscribe to aircraft heading/yaw. Separate sy
 telemetry fields keep these cards independent of the processed platform drawing
 and motion calculations. No PLC feedback is needed to display raw samples; cards
 show placeholders before their first sample and after simulator disconnect until
-new samples arrive. Live MSFS/hardware validation is still required. The scaling and
+new samples arrive. Full live angle-sweep/HMI and hardware validation is still required. The scaling and
 neutral-return requirements above are intended behavior, not a validated motion
-implementation. The current shared Clamp helper divides inputs by two before
-clamping, including rudder/yaw; it has no 80-degree neutral-return behavior.
+implementation. The current ScaleAndLimitAngle helper in MotionCalculator divides inputs by two
+before clamping, including rudder/yaw; it has no 80-degree neutral-return behavior.
 The repeated "Attitude limited" warning was removed because it treated normal
 halving as a limit violation. Scaling and clamping remain unchanged; the raw/target
 cards still show the resulting angles.
+
+The owner requested a student-readable cleanup of the entire simulator-to-controller
+connection: clear responsibilities, useful comments, fewer redundant helpers, and
+separate files where appropriate. Motion/protocol behavior must remain unchanged
+unless separately agreed. README contains a student reading guide and thread map.
 
 ## Working with the owner
 
@@ -80,12 +85,17 @@ All components -> synchronized DashboardModel -> Win32/GDI HMI
   output and feedback threads, and shutdown.
 - `BuildMode.h`: compile-time target selection, bind addresses, ports, and PLC
   number formatting. Exactly one of `TARGET_PLC` and `TARGET_UNITY` must be set.
-- `SimConnectHandler.h/.cpp`: simulator subscriptions, attitude mapping, motion
-  limits, physical mounting coordinates, actuator calculations, and serialization.
+- `SimConnectHandler.h/.cpp`: owns the SimConnect handle, subscriptions, dispatch,
+  calculation scheduling, dashboard updates, and synchronized latest-payload cache.
+- `BridgeTypes.h`: common actuator count/array, platform attitude, and command types.
+- `MotionCalculator.h/.cpp`: pure attitude mapping and motion calculations, physical
+  mounting coordinates, calibration/limits, and shared 50 ms control interval.
+- `ControllerProtocol.h/.cpp`: PLC/Unity serialization, feedback validation, and
+  incremental message framing; independent of Winsock and SimConnect.
 - `calculate_legs.h/.cpp`: vector operations and Euler rotation geometry. Keep
   this independent of Windows, networking, and SimConnect.
 - `TCPServer.h/.cpp`: Winsock listener, client replacement after disconnect,
-  complete sends, buffered input parsing, and synchronized position feedback.
+  complete sends, delegation to the protocol parser, and synchronized position feedback.
 - `DashboardModel.h/.cpp`: thread-safe telemetry snapshots and recent events;
   independent of Windows and SimConnect.
 - `HmiWindow.h/.cpp`: native Win32/GDI dashboard, refreshed every 50 ms, with an
@@ -95,7 +105,8 @@ All components -> synchronized DashboardModel -> Win32/GDI HMI
   only the visualization.
 - `ProtocolLogger.h/.cpp`: synchronized protocol logging to
   `logs/FlightSim_StewartServer_Log.txt`, relative to the working directory.
-- `tests/`: standalone geometry and dashboard-model test executables.
+- `tests/`: standalone geometry, dashboard-model, motion-calculator, and protocol
+  test executables. Protocol tests require nlohmann/json; the others do not.
 
 The HMI opens before external systems connect. SimConnect connection attempts
 repeat every five seconds when unavailable. The feedback worker accepts a new
@@ -154,7 +165,8 @@ msbuild StuartServer.sln /p:Configuration=Release /p:Platform=x64
 ```
 
 `CMakeLists.txt` is auxiliary. It lists application sources and Windows libraries,
-but does not configure SimConnect or nlohmann/json discovery. Successful CMake
+and discovers nlohmann/json via find_path or NLOHMANN_JSON_INCLUDE_DIR,
+but does not configure SimConnect discovery or linking. Successful CMake
 configuration alone does not establish that the application builds.
 `.gitmodules` declares googletest and nlohmann/json; neither is checked out in
 the inspected tree. Existing tests use standalone executables, not googletest.
@@ -164,8 +176,8 @@ test relies on assertions, which Release builds may disable:
 
 ```powershell
 cmake -S . -B build -DBUILD_TESTING=ON -DCMAKE_BUILD_TYPE=Debug
-cmake --build build --config Debug --target calculate_legs_tests dashboard_model_tests
-ctest --test-dir build -C Debug --output-on-failure
+cmake --build build --config Debug --target calculate_legs_tests dashboard_model_tests motion_calculator_tests
+ctest --test-dir build -C Debug --output-on-failure -E controller_protocol_tests
 ```
 
 `CMAKE_BUILD_TYPE` applies to single-configuration generators; `--config` and
@@ -173,11 +185,24 @@ ctest --test-dir build -C Debug --output-on-failure
 
 - Geometry tests check neutral symmetry and finite positive lengths at selected
   boundary poses. Dashboard tests check telemetry updates and disconnect state.
+  Motion tests preserve current mapping, step/speed limits, and actuator order.
+  The current level-pose calibration rounds to 201, despite reference position 200.
+- When nlohmann/json is found, build controller_protocol_tests before CTest. It
+  checks both PLC formats, Unity, malformed feedback, fragmentation, combined
+  messages, legacy framing, and stream reset; it does not require Windows or MSFS.
+  Then run CTest without the -E exclusion to execute all four suites.
 - For relevant runtime changes, validate startup without MSFS/client, reconnects,
   orderly shutdown, feedback gating, fragmented/combined messages, and nominal
   20 Hz output. Exercise both target modes when changing shared protocol code.
 - Report which checks ran and any missing toolchain, SDK, client, or hardware.
   Do not claim runtime or hardware validation from unit tests alone.
+
+Cleanup validation in September 2026: Debug/Release x64 builds, all four test
+suites, and 5,324 original/refactored motion comparisons passed. Temporary PLC
+and Unity builds bound to loopback received live MSFS telemetry and passed
+feedback rejection/framing, reconnect gating, and HMI-close shutdown checks.
+Short output samples measured 20.1 Hz (PLC) and 20.0 Hz (Unity). Physical hardware,
+startup without MSFS, and simulator loss/reconnect were not validated in that run.
 
 ## Change conventions
 

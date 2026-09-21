@@ -5,12 +5,10 @@
 namespace {
 constexpr float Pi = 3.14159265358979323846f;
 
-// Convert angles to radians
-vec rad(float psi, float theta, float phi) {
-    vec rad{ psi * (Pi / 180.0f), theta * (Pi / 180.0f), phi * (Pi / 180.0f) };
-    return rad;
+// psi, theta, phi are the conventional Euler angles about Z, Y, X.
+vec AnglesInRadians(float psi, float theta, float phi) {
+    return { psi * (Pi / 180.0f), theta * (Pi / 180.0f), phi * (Pi / 180.0f) };
 }
-
 }
 
 vec vec::operator+(const vec& other) const {
@@ -41,10 +39,10 @@ vec dot_product(const std::array<std::array<float, 3>, 3>& matrix, const vec& v)
     return result;
 }
 
-// Function to compute the rotation matrix
+// Rotation matrix Rz(psi) * Ry(theta) * Rx(phi), using degree inputs.
 std::array<std::array<float, 3>, 3> rotation_matrix(float psi, float theta, float phi) {
     std::array<std::array<float, 3>, 3> PRB;
-    vec rotation_rad = rad(psi, theta, phi);
+    const vec rotation_rad = AnglesInRadians(psi, theta, phi);
 
     float cos_psi = std::cos(rotation_rad.x);
     float sin_psi = std::sin(rotation_rad.x);
@@ -68,15 +66,15 @@ std::array<std::array<float, 3>, 3> rotation_matrix(float psi, float theta, floa
     return PRB;
 }
 
-// Function to compute l_i
+// l_i means the vector from base mounting point i to platform mounting point i.
 vec compute_li_vector(const vec& T, float psi, float theta, float phi, const vec& p_i, const vec& b_i) {
     std::array<std::array<float, 3>, 3> PRB = rotation_matrix(psi, theta, phi);
-    // Compute l_i as T + PRB * p_i - b_i
+    // T = platform translation, PRB = rotation, p_i/b_i = mounting coordinates.
     vec l_i = T + dot_product(PRB, p_i) - b_i;
     return l_i;
 }
 
-// Function to compute the length of l_i
+// Actuator length is the magnitude of its base-to-platform vector.
 float compute_li_length(const vec& T, float psi, float theta, float phi, const vec& p_i, const vec& b_i) {
     vec l_i = compute_li_vector(T, psi, theta, phi, p_i, b_i);
     return l_i.magnitude();

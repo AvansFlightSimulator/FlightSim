@@ -248,10 +248,6 @@ bool HmiWindow::Create(HINSTANCE instance, int showCommand) {
     return true;
 }
 
-bool HmiWindow::IsOpen() const noexcept {
-    return window_ != nullptr;
-}
-
 LRESULT CALLBACK HmiWindow::WindowProcedure(
     HWND window,
     UINT message,

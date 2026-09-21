@@ -24,7 +24,6 @@ public:
     HmiWindow& operator=(const HmiWindow&) = delete;
 
     bool Create(HINSTANCE instance, int showCommand);
-    bool IsOpen() const noexcept;
 
 private:
     static LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARAM lParam);
