@@ -1,6 +1,7 @@
 #include "HmiWindow.h"
 
 #include "DashboardModel.h"
+#include "MotionController.h"
 #include "calculate_legs.h"
 
 #include <windowsx.h>
@@ -9,6 +10,7 @@
 #include <array>
 #include <cmath>
 #include <iomanip>
+#include <locale>
 #include <sstream>
 #include <string>
 
@@ -21,6 +23,9 @@ namespace {
 constexpr UINT_PTR RefreshTimerId = 1;
 constexpr UINT RefreshIntervalMilliseconds = 50;
 constexpr double Pi = 3.14159265358979323846;
+constexpr int SourceControlId = 100;
+constexpr int FirstAngleControlId = 101;
+constexpr int ExecuteControlId = 104;
 
 const COLORREF Background = RGB(13, 20, 29);
 const COLORREF Panel = RGB(21, 31, 43);
@@ -33,10 +38,28 @@ const COLORREF Green = RGB(74, 222, 128);
 const COLORREF Amber = RGB(251, 191, 36);
 const COLORREF Red = RGB(248, 113, 113);
 const COLORREF Blue = RGB(73, 150, 255);
+const COLORREF DisabledField = RGB(19, 28, 39);
+const COLORREF DisabledText = RGB(113, 132, 151);
+const COLORREF HoverBorder = RGB(85, 119, 142);
+constexpr int ControlTop = 201;
+constexpr int ControlHeight = 36;
 
 RECT MakeRect(int left, int top, int right, int bottom) {
     RECT result{ left, top, right, bottom };
     return result;
+}
+
+RECT AngleFieldBounds(int index) {
+    const int left = 224 + index * 110;
+    return MakeRect(left, ControlTop, left + 94, ControlTop + ControlHeight);
+}
+
+bool MouseOver(HWND window) {
+    POINT cursor{};
+    RECT bounds{};
+    GetCursorPos(&cursor);
+    GetWindowRect(window, &bounds);
+    return PtInRect(&bounds, cursor) && WindowFromPoint(cursor) == window;
 }
 
 void FillRectangle(HDC dc, const RECT& rect, COLORREF color) {
@@ -138,7 +161,8 @@ void DrawActuatorCard(
     float current,
     float target,
     float speed,
-    bool hasFeedback) {
+    bool hasFeedback,
+    bool hasTarget) {
     FillRoundedRectangle(dc, rect, Panel, Border);
 
     const COLORREF actuatorColor = hasFeedback ? Cyan : SecondaryText;
@@ -162,19 +186,21 @@ void DrawActuatorCard(
             FillRoundedRectangle(dc, fill, Cyan, Cyan);
         }
 
-        const double targetRatio = (std::max)(0.0, (std::min)(1.0, target / 400.0));
-        const int markerX = barLeft + static_cast<int>((barRight - barLeft) * targetRatio);
-        HPEN markerPen = CreatePen(PS_SOLID, 2, Amber);
-        HGDIOBJ oldPen = SelectObject(dc, markerPen);
-        MoveToEx(dc, markerX, barTop - 3, nullptr);
-        LineTo(dc, markerX, barTop + 11);
-        SelectObject(dc, oldPen);
-        DeleteObject(markerPen);
+        if (hasTarget) {
+            const double targetRatio = (std::max)(0.0, (std::min)(1.0, target / 400.0));
+            const int markerX = barLeft + static_cast<int>((barRight - barLeft) * targetRatio);
+            HPEN markerPen = CreatePen(PS_SOLID, 2, Amber);
+            HGDIOBJ oldPen = SelectObject(dc, markerPen);
+            MoveToEx(dc, markerX, barTop - 3, nullptr);
+            LineTo(dc, markerX, barTop + 11);
+            SelectObject(dc, oldPen);
+            DeleteObject(markerPen);
+        }
     }
 
-    DrawTextValue(dc, smallFont, "TARGET  " + (hasFeedback ? FormatNumber(target, 1) : "--.-") + " mm",
+    DrawTextValue(dc, smallFont, "TARGET  " + (hasFeedback && hasTarget ? FormatNumber(target, 1) : "--.-") + " mm",
         MakeRect(rect.left + 14, rect.top + 59, rect.right - 12, rect.top + 80), SecondaryText);
-    DrawTextValue(dc, bodyFont, "SPEED  " + (hasFeedback ? FormatNumber(speed, 0) : "---") + " mm/s",
+    DrawTextValue(dc, bodyFont, "SPEED  " + (hasFeedback && hasTarget ? FormatNumber(speed, 0) : "---") + " mm/s",
         MakeRect(rect.left + 14, rect.top + 80, rect.right - 12, rect.bottom - 5), PrimaryText);
 }
 
@@ -192,10 +218,12 @@ COLORREF EventColor(DashboardEventLevel level) {
 
 HmiWindow::HmiWindow(
     DashboardModel& model,
+    MotionController& motion,
     const std::string& targetName,
     const std::string& bindIp,
     int port)
     : model_(model),
+      motion_(motion),
       targetName_(targetName),
       endpoint_(bindIp + ':' + std::to_string(port)) {
 }
@@ -205,6 +233,8 @@ HmiWindow::~HmiWindow() {
         DestroyWindow(window_);
     }
     DestroyFonts();
+    DeleteObject(fieldBrush_);
+    DeleteObject(disabledFieldBrush_);
 }
 
 bool HmiWindow::Create(HINSTANCE instance, int showCommand) {
@@ -228,11 +258,11 @@ bool HmiWindow::Create(HINSTANCE instance, int showCommand) {
         0,
         className,
         L"Flight Simulator Motion HMI",
-        WS_OVERLAPPEDWINDOW,
+        WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
         CW_USEDEFAULT,
         CW_USEDEFAULT,
         1280,
-        820,
+        920,
         nullptr,
         nullptr,
         instance,
@@ -242,10 +272,174 @@ bool HmiWindow::Create(HINSTANCE instance, int showCommand) {
         return false;
     }
 
+    if (!CreateControls(instance)) {
+        DestroyWindow(window_);
+        return false;
+    }
     ShowWindow(window_, showCommand);
     UpdateWindow(window_);
     SetTimer(window_, RefreshTimerId, RefreshIntervalMilliseconds, nullptr);
     return true;
+}
+
+bool HmiWindow::CreateControls(HINSTANCE instance) {
+    fieldBrush_ = CreateSolidBrush(PanelRaised);
+    disabledFieldBrush_ = CreateSolidBrush(DisabledField);
+    const auto create = [&](const wchar_t* kind, const wchar_t* text, DWORD style,
+        int x, int width, int height, int id) {
+        HWND control = CreateWindowExW(0, kind, text, WS_CHILD | WS_VISIBLE | WS_TABSTOP | style,
+            x, ControlTop, width, height, window_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)), instance, nullptr);
+        SendMessage(control, WM_SETFONT, reinterpret_cast<WPARAM>(bodyFont_), TRUE);
+        return control;
+    };
+    sourceControl_ = create(L"COMBOBOX", L"", CBS_DROPDOWNLIST | CBS_OWNERDRAWFIXED | CBS_HASSTRINGS,
+        24, 180, 150, SourceControlId);
+    if (!sourceControl_) {
+        return false;
+    }
+    SendMessage(sourceControl_, CB_SETITEMHEIGHT, static_cast<WPARAM>(-1), ControlHeight - 6);
+    SendMessage(sourceControl_, CB_SETITEMHEIGHT, 0, 32);
+    // Customize painting only; keep the native dropdown and keyboard behavior.
+    SetWindowLongPtr(sourceControl_, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(this));
+    originalSourceProcedure_ = reinterpret_cast<WNDPROC>(SetWindowLongPtr(sourceControl_, GWLP_WNDPROC,
+        reinterpret_cast<LONG_PTR>(SourceControlProcedure)));
+    SendMessageW(sourceControl_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"MSFS (live)"));
+    SendMessageW(sourceControl_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Manual input"));
+    SendMessage(sourceControl_, CB_SETCURSEL, 0, 0);
+    for (int index = 0; index < 3; ++index) {
+        const RECT field = AngleFieldBounds(index);
+        angleControls_[index] = create(L"EDIT", L"0", ES_AUTOHSCROLL,
+            field.left + 12, 70, 20, FirstAngleControlId + index);
+        SetWindowPos(angleControls_[index], nullptr, field.left + 12, field.top + 8, 70, 20,
+            SWP_NOZORDER | SWP_NOACTIVATE);
+        SendMessage(angleControls_[index], EM_SETMARGINS, EC_LEFTMARGIN | EC_RIGHTMARGIN, 0);
+        SendMessage(angleControls_[index], EM_SETLIMITTEXT, 63, 0);
+        if (!angleControls_[index]) {
+            return false;
+        }
+    }
+    executeControl_ = create(L"BUTTON", L"Execute", BS_OWNERDRAW, 564, 120, ControlHeight, ExecuteControlId);
+    RefreshControls();
+    return sourceControl_ && executeControl_;
+}
+
+LRESULT CALLBACK HmiWindow::SourceControlProcedure(HWND window, UINT message, WPARAM wParam, LPARAM lParam) {
+    auto* self = reinterpret_cast<HmiWindow*>(GetWindowLongPtr(window, GWLP_USERDATA));
+    if (message == WM_PAINT) {
+        PAINTSTRUCT paint{};
+        HDC dc = BeginPaint(window, &paint);
+        self->DrawSourceControl(dc);
+        EndPaint(window, &paint);
+        return 0;
+    }
+    if (message == WM_PRINTCLIENT) {
+        self->DrawSourceControl(reinterpret_cast<HDC>(wParam));
+        return 0;
+    }
+    if (message == WM_ERASEBKGND) {
+        return 1;
+    }
+    return CallWindowProcW(self->originalSourceProcedure_, window, message, wParam, lParam);
+}
+
+void HmiWindow::DrawSourceControl(HDC dc) {
+    RECT bounds{};
+    GetClientRect(sourceControl_, &bounds);
+    const bool focused = GetFocus() == sourceControl_ || SendMessage(sourceControl_, CB_GETDROPPEDSTATE, 0, 0);
+    FillRectangle(dc, bounds, Background);
+    FillRoundedRectangle(dc, bounds, PanelRaised, focused ? Cyan : MouseOver(sourceControl_) ? HoverBorder : Border);
+    const int selection = static_cast<int>(SendMessage(sourceControl_, CB_GETCURSEL, 0, 0));
+    DrawTextValue(dc, bodyFont_, selection == 1 ? "Manual input" : "MSFS (live)",
+        MakeRect(12, 0, bounds.right - 34, bounds.bottom), PrimaryText);
+    const int arrowX = bounds.right - 19;
+    const int arrowY = bounds.bottom / 2;
+    HPEN pen = CreatePen(PS_SOLID, 2, focused ? Cyan : SecondaryText);
+    HGDIOBJ previous = SelectObject(dc, pen);
+    MoveToEx(dc, arrowX - 4, arrowY - 2, nullptr);
+    LineTo(dc, arrowX, arrowY + 2);
+    LineTo(dc, arrowX + 4, arrowY - 2);
+    SelectObject(dc, previous);
+    DeleteObject(pen);
+}
+
+void HmiWindow::DrawControl(const DRAWITEMSTRUCT& item) {
+    if (item.CtlID == SourceControlId) {
+        if (item.itemID == static_cast<UINT>(-1)) {
+            return;
+        }
+        const bool selected = (item.itemState & ODS_SELECTED) != 0;
+        FillRectangle(item.hDC, item.rcItem, selected ? RGB(29, 68, 78) : PanelRaised);
+        RECT text = item.rcItem;
+        text.left += 12;
+        DrawTextValue(item.hDC, bodyFont_, item.itemID == 1 ? "Manual input" : "MSFS (live)",
+            text, selected ? Cyan : PrimaryText);
+        return;
+    }
+    const bool enabled = (item.itemState & ODS_DISABLED) == 0;
+    const bool pressed = (item.itemState & ODS_SELECTED) != 0;
+    const bool focused = (item.itemState & ODS_FOCUS) != 0;
+    const COLORREF fill = !enabled ? DisabledField : pressed ? RGB(30, 163, 158)
+        : MouseOver(executeControl_) ? RGB(96, 231, 222) : Cyan;
+    FillRectangle(item.hDC, item.rcItem, Background);
+    FillRoundedRectangle(item.hDC, item.rcItem, fill, enabled ? fill : Border);
+    RECT text = item.rcItem;
+    if (pressed) {
+        OffsetRect(&text, 0, 1);
+    }
+    DrawTextValue(item.hDC, bodyFont_, "Execute", text, enabled ? Background : DisabledText,
+        DT_CENTER | DT_SINGLELINE | DT_VCENTER);
+    if (enabled && focused) {
+        RECT focus = item.rcItem;
+        InflateRect(&focus, -4, -4);
+        HGDIOBJ brush = SelectObject(item.hDC, GetStockObject(NULL_BRUSH));
+        HPEN pen = CreatePen(PS_SOLID, 1, Background);
+        HGDIOBJ previousPen = SelectObject(item.hDC, pen);
+        RoundRect(item.hDC, focus.left, focus.top, focus.right, focus.bottom, 10, 10);
+        SelectObject(item.hDC, previousPen);
+        SelectObject(item.hDC, brush);
+        DeleteObject(pen);
+    }
+}
+
+bool HmiWindow::ProcessControlMessage(MSG& message) {
+    return window_ && IsDialogMessageW(window_, &message);
+}
+
+void HmiWindow::RefreshControls() {
+    const auto snapshot = model_.GetSnapshot();
+    for (HWND control : angleControls_) {
+        if (control && static_cast<bool>(IsWindowEnabled(control)) != snapshot.manualMode) {
+            EnableWindow(control, snapshot.manualMode);
+        }
+    }
+    const bool canExecute = snapshot.manualMode && snapshot.clientConnected && snapshot.positionFeedback;
+    if (executeControl_ && static_cast<bool>(IsWindowEnabled(executeControl_)) != canExecute) {
+        EnableWindow(executeControl_, canExecute);
+    }
+}
+
+void HmiWindow::ExecuteManualInput() {
+    double values[3]{};
+    for (int index = 0; index < 3; ++index) {
+        char text[64]{};
+        GetWindowTextA(angleControls_[index], text, sizeof(text));
+        std::istringstream stream(text);
+        stream.imbue(std::locale::classic());
+        if (!(stream >> values[index]) || !std::isfinite(values[index]) || !(stream >> std::ws).eof()) {
+            inputStatus_ = "Enter three finite numbers in degrees (decimal point: .).";
+            SetFocus(angleControls_[index]);
+            SendMessage(angleControls_[index], EM_SETSEL, 0, -1);
+            InvalidateRect(window_, nullptr, FALSE);
+            return;
+        }
+    }
+    if (motion_.ExecuteManualInput({ values[0], values[1], values[2] })) {
+        inputStatus_ = "Applied. Edit values and Execute again to change the target.";
+    }
+    else {
+        inputStatus_ = "Select manual input and connect a controller with valid feedback.";
+    }
+    InvalidateRect(window_, nullptr, FALSE);
 }
 
 LRESULT CALLBACK HmiWindow::WindowProcedure(
@@ -268,8 +462,54 @@ LRESULT CALLBACK HmiWindow::WindowProcedure(
 
 LRESULT HmiWindow::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
     switch (message) {
+    case WM_MEASUREITEM: {
+        auto* item = reinterpret_cast<MEASUREITEMSTRUCT*>(lParam);
+        if (item->CtlID == SourceControlId) {
+            item->itemHeight = 32;
+            return TRUE;
+        }
+        break;
+    }
+    case WM_DRAWITEM: {
+        const auto* item = reinterpret_cast<const DRAWITEMSTRUCT*>(lParam);
+        if (item->CtlID == SourceControlId || item->CtlID == ExecuteControlId) {
+            DrawControl(*item);
+            return TRUE;
+        }
+        break;
+    }
+    case WM_CTLCOLOREDIT:
+    case WM_CTLCOLORSTATIC:
+    case WM_CTLCOLORLISTBOX: {
+        HDC dc = reinterpret_cast<HDC>(wParam);
+        const bool enabled = IsWindowEnabled(reinterpret_cast<HWND>(lParam)) != FALSE;
+        SetTextColor(dc, enabled ? PrimaryText : DisabledText);
+        SetBkColor(dc, enabled ? PanelRaised : DisabledField);
+        return reinterpret_cast<LRESULT>(enabled ? fieldBrush_ : disabledFieldBrush_);
+    }
+    case WM_COMMAND:
+        if (LOWORD(wParam) == SourceControlId && HIWORD(wParam) == CBN_SELCHANGE) {
+            motion_.SetManualMode(SendMessage(sourceControl_, CB_GETCURSEL, 0, 0) == 1);
+            inputStatus_.clear();
+            RefreshControls();
+            InvalidateRect(window_, nullptr, FALSE);
+            return 0;
+        }
+        if (LOWORD(wParam) == ExecuteControlId && HIWORD(wParam) == BN_CLICKED) {
+            ExecuteManualInput();
+            return 0;
+        }
+        break;
     case WM_LBUTTONDOWN: {
         const POINT mouse{ GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+        // The padded border belongs to the parent; clicking it focuses the native edit.
+        for (int index = 0; index < 3; ++index) {
+            const RECT field = AngleFieldBounds(index);
+            if (PtInRect(&field, mouse) && IsWindowEnabled(angleControls_[index])) {
+                SetFocus(angleControls_[index]);
+                return 0;
+            }
+        }
         if (PtInRect(&diagramBounds_, mouse)) {
             orbitMouse_ = mouse;
             orbitDragging_ = true;
@@ -323,6 +563,9 @@ LRESULT HmiWindow::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
         return 0;
     case WM_TIMER:
         if (wParam == RefreshTimerId) {
+            RefreshControls();
+            InvalidateRect(sourceControl_, nullptr, FALSE);
+            InvalidateRect(executeControl_, nullptr, FALSE);
             InvalidateRect(window_, nullptr, FALSE);
         }
         return 0;
@@ -334,7 +577,7 @@ LRESULT HmiWindow::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
     case WM_GETMINMAXINFO: {
         auto* information = reinterpret_cast<MINMAXINFO*>(lParam);
         information->ptMinTrackSize.x = 1120;
-        information->ptMinTrackSize.y = 720;
+        information->ptMinTrackSize.y = 820;
         return 0;
     }
     case WM_CLOSE:
@@ -348,6 +591,7 @@ LRESULT HmiWindow::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
     default:
         return DefWindowProcW(window_, message, wParam, lParam);
     }
+    return DefWindowProcW(window_, message, wParam, lParam);
 }
 
 void HmiWindow::Paint() {
@@ -377,7 +621,7 @@ void HmiWindow::Render(HDC dc, const RECT& client, const DashboardSnapshot& snap
         MakeRect(padding, 16, width - padding, 50), PrimaryText);
     DrawTextValue(dc, bodyFont_, "6DOF STEWART PLATFORM  /  " + targetName_ + "  /  " + endpoint_,
         MakeRect(padding, 49, width - padding, 72), SecondaryText);
-    DrawTextValue(dc, smallFont_, "LIVE TELEMETRY",
+    DrawTextValue(dc, smallFont_, snapshot.manualMode ? "MANUAL INPUT" : "LIVE TELEMETRY",
         MakeRect(width - 190, 22, width - padding, 46), Cyan,
         DT_RIGHT | DT_SINGLELINE | DT_VCENTER);
 
@@ -392,9 +636,10 @@ void HmiWindow::Render(HDC dc, const RECT& client, const DashboardSnapshot& snap
         width - padding, statusTop + statusHeight);
 
     DrawStatusCard(dc, simulatorCard, headingFont_, smallFont_, "MICROSOFT FLIGHT SIMULATOR 2020",
-        snapshot.simulatorConnected ? "Connected" : "Disconnected",
-        snapshot.simulatorConnected ? "SimConnect is streaming aircraft data" : "Waiting for SimConnect",
-        snapshot.simulatorConnected ? Green : Red);
+        snapshot.manualMode ? "Manual mode" : snapshot.simulatorConnected ? "Connected" : "Disconnected",
+        snapshot.manualMode ? "MSFS connection is not required" : snapshot.simulatorConnected
+            ? "SimConnect is streaming aircraft data" : "Waiting for SimConnect",
+        snapshot.manualMode ? Cyan : snapshot.simulatorConnected ? Green : Red);
 
     std::string controllerStatus = "Waiting";
     std::string controllerDetail = "Opening TCP listener";
@@ -424,7 +669,29 @@ void HmiWindow::Render(HDC dc, const RECT& client, const DashboardSnapshot& snap
             + "  /  " + DataAge(snapshot.elapsedMilliseconds, snapshot.lastFeedbackMilliseconds),
         dataLive ? Cyan : SecondaryText);
 
-    const int contentTop = statusTop + statusHeight + 16;
+    DrawTextValue(dc, smallFont_, "INPUT SOURCE", MakeRect(24, 176, 204, 199), SecondaryText);
+    const char* inputLabels[] = { "PITCH (deg)", "ROLL (deg)", "RUDDER (deg)" };
+    for (int index = 0; index < 3; ++index) {
+        DrawTextValue(dc, smallFont_, inputLabels[index],
+            MakeRect(224 + index * 110, 176, 324 + index * 110, 199), SecondaryText);
+        const RECT field = AngleFieldBounds(index);
+        POINT cursor{};
+        GetCursorPos(&cursor);
+        ScreenToClient(window_, &cursor);
+        const bool focused = GetFocus() == angleControls_[index];
+        const COLORREF outline = !snapshot.manualMode ? Border : focused ? Cyan
+            : PtInRect(&field, cursor) ? HoverBorder : Border;
+        FillRoundedRectangle(dc, field, snapshot.manualMode ? PanelRaised : DisabledField, outline);
+    }
+    const std::string controlStatus = !snapshot.manualMode ? "Live MSFS controls the target"
+        : !snapshot.clientConnected || !snapshot.positionFeedback ? "Waiting for controller position feedback"
+        : snapshot.manualInputAvailable ? "Manual target active" : "Ready - press Execute to apply";
+    DrawTextValue(dc, bodyFont_, controlStatus, MakeRect(704, ControlTop, width - padding, ControlTop + ControlHeight), Cyan);
+    DrawTextValue(dc, smallFont_, inputStatus_.empty()
+        ? "Manual angles use MSFS signs and scaling; platform targets are limited to +/-30 degrees."
+        : inputStatus_, MakeRect(padding, 245, width - padding, 269), SecondaryText);
+
+    const int contentTop = statusTop + statusHeight + 116;
     const int contentBottom = height - padding;
     const int contentGap = 16;
     const int leftWidth = static_cast<int>((width - (2 * padding) - contentGap) * 0.47);
@@ -543,12 +810,15 @@ void HmiWindow::Render(HDC dc, const RECT& client, const DashboardSnapshot& snap
     RestoreDC(dc, savedDc);
 
     const int poseTop = diagramBottom + 8;
-    DrawTextValue(dc, smallFont_, "MSFS / PLATFORM TARGET (DEGREES)",
+    DrawTextValue(dc, smallFont_, snapshot.manualMode ? "APPLIED INPUT / PLATFORM TARGET (DEGREES)"
+        : "MSFS / PLATFORM TARGET (DEGREES)",
         MakeRect(leftPanel.left + 18, poseTop, leftPanel.right - 18, poseTop + 24), SecondaryText);
     const int poseWidth = (leftPanel.right - leftPanel.left - 52) / 3;
     const char* poseLabels[] = { "PITCH", "ROLL", "RUDDER / YAW" };
     const double poseValues[] = {
-        snapshot.simulatorPitchDegrees, snapshot.simulatorRollDegrees, snapshot.simulatorRudderDegrees
+        snapshot.manualMode ? snapshot.manualInput.pitchDegrees : snapshot.simulatorPitchDegrees,
+        snapshot.manualMode ? snapshot.manualInput.rollDegrees : snapshot.simulatorRollDegrees,
+        snapshot.manualMode ? snapshot.manualInput.rudderDegrees : snapshot.simulatorRudderDegrees
     };
     const bool poseAvailable[] = {
         snapshot.simulatorAttitudeAvailable, snapshot.simulatorAttitudeAvailable, snapshot.simulatorRudderAvailable
@@ -562,12 +832,14 @@ void HmiWindow::Render(HDC dc, const RECT& client, const DashboardSnapshot& snap
         const int middle = x + poseWidth / 2;
         FillRectangle(dc, MakeRect(middle, poseRect.top + 26, middle + 1, poseRect.bottom - 8), Border);
         const UINT centered = DT_CENTER | DT_SINGLELINE | DT_VCENTER;
-        DrawTextValue(dc, smallFont_, "MSFS",
+        DrawTextValue(dc, smallFont_, snapshot.manualMode ? "INPUT" : "MSFS",
             MakeRect(x + 6, poseRect.top + 25, middle - 6, poseRect.top + 44), SecondaryText, centered);
         DrawTextValue(dc, smallFont_, "TARGET",
             MakeRect(middle + 6, poseRect.top + 25, poseRect.right - 6, poseRect.top + 44), Cyan, centered);
-        const bool rawAvailable = snapshot.simulatorConnected && poseAvailable[index];
-        const bool targetAvailable = rawAvailable && snapshot.simulatorAttitudeAvailable && snapshot.motionAvailable;
+        const bool rawAvailable = snapshot.manualMode ? snapshot.manualInputAvailable
+            : snapshot.simulatorConnected && poseAvailable[index];
+        const bool targetAvailable = rawAvailable && snapshot.motionAvailable
+            && (snapshot.manualMode || snapshot.simulatorAttitudeAvailable);
         DrawTextValue(dc, valueFont_, rawAvailable ? FormatNumber(poseValues[index], 1) : "--.-",
             MakeRect(x + 6, poseRect.top + 44, middle - 6, poseRect.bottom - 6), PrimaryText, centered);
         DrawTextValue(dc, valueFont_, targetAvailable ? FormatNumber(platformValues[index], 1) : "--.-",
@@ -611,7 +883,7 @@ void HmiWindow::Render(HDC dc, const RECT& client, const DashboardSnapshot& snap
         const RECT card = MakeRect(left, top, left + cardWidth, top + cardHeight);
         DrawActuatorCard(dc, card, headingFont_, bodyFont_, smallFont_, index + 1,
             snapshot.currentPositions[index], snapshot.targetPositions[index], snapshot.speeds[index],
-            snapshot.positionFeedback);
+            snapshot.positionFeedback, snapshot.motionAvailable);
     }
 }
 

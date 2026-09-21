@@ -1,18 +1,31 @@
 # Flight Simulator Bridge
 
-This Windows application connects Microsoft Flight Simulator to either a PLC or a Unity client. It reads aircraft orientation and rudder data through the MSFS SimConnect SDK, translates that motion into target lengths and speeds for six platform actuators, and exchanges newline-delimited JSON over TCP.
+This Windows application connects Microsoft Flight Simulator or manual HMI input to either a PLC or a Unity client. It reads aircraft orientation and rudder data through the MSFS SimConnect SDK, translates that motion into target lengths and speeds for six platform actuators, and exchanges newline-delimited JSON over TCP.
+
+## Manual input without MSFS
+
+1. Start the application and select **Manual input**. SimConnect closes and connection retries pause. Selecting manual mode does not request a move.
+2. Connect the PLC/Unity client and supply valid six-position feedback. **Execute** stays disabled until that feedback is available.
+3. Enter **Pitch**, **Roll**, and **Rudder** in degrees and press **Execute**. As requested by the owner, these are simulated MSFS inputs. Pitch and roll are halved, pitch is negated, and rudder is divided by 1.5 before the existing negation/halving into platform yaw. Each platform target is clamped to +/-30 degrees. For example, inputs 20, -40, 12 request targets -10, -20, -4 degrees.
+4. The cards compare applied **INPUT** with calculated **TARGET**. Editing fields does not change the active target until Execute is pressed again. Empty, malformed, and nonfinite inputs are rejected; use a period for decimals.
+5. The applied target is recalculated every nominal 50 ms using controller feedback and the existing step/speed limits. Output continues to maintain the target. To request level, enter zero in all three fields and press Execute.
+
+Selecting **MSFS (live)** resumes simulator connection attempts and live input. Changing sources clears the cached command and requires new data from the selected source; reentering manual requires Execute again. Source selection is not a physical stop command and cannot cancel a command already sent. A controller disconnect resets the feedback gate; the applied manual target is retained and output resumes after the replacement client supplies valid feedback. There is no feedback-age watchdog or measured-attitude completion signal.
+
+Manual mode removes the need for a running simulator connection. The application still builds against and loads the SimConnect SDK/runtime; this is not an SDK-free build.
 
 ## Runtime flow
 
 1. `main.cpp` opens the HMI and starts the TCP server for the target selected in `BuildMode.h`. The HMI remains responsive while it waits for external systems.
 2. `SimConnectHandler` connects to MSFS and subscribes to pitch, bank, and rudder updates.
-3. At most 20 times per second, `MotionCalculator` converts simulator units, applies the existing sign changes, halves each angle, and clamps it to +/-30 degrees. It calculates one rotation matrix shared by all six actuators.
-4. With valid controller feedback available, each actuator target is limited to the configured maximum step and speed. `ControllerProtocol` encodes the command as PLC or Unity JSON, which the handler publishes as the latest payload.
+3. `MotionController` accepts live samples or applied manual inputs, preserving the extra rudder division by 1.5. At most 20 times per second for the selected source, `MotionCalculator` converts simulator units, applies the existing sign changes, halves each angle, and clamps it to +/-30 degrees. It calculates one rotation matrix shared by all six actuators.
+4. With valid controller feedback available, each actuator target is limited to the configured maximum step and speed. `ControllerProtocol` encodes the command as PLC or Unity JSON, which `MotionController` publishes as the latest payload.
 5. The output worker sends the latest payload at 20 Hz while the feedback worker receives `currentPositions` messages.
 6. If the client disconnects, the feedback worker keeps the listening socket open and waits for a replacement client.
 
 ```text
-MSFS -> SimConnectHandler -> MotionCalculator -> ControllerProtocol -> latest JSON
+MSFS -> SimConnectHandler --+
+HMI manual input ----------+-> MotionController -> MotionCalculator -> latest JSON
                                                                          |
 PLC / Unity <- TCPServer <- main.cpp output worker (20 Hz) <---------------+
 PLC / Unity -> TCPServer -> ControllerProtocol -> position feedback
@@ -23,10 +36,11 @@ PLC / Unity -> TCPServer -> ControllerProtocol -> position feedback
 ## File map
 
 - `BuildMode.h`: selects exactly one output target and defines its TCP bind address, port, and PLC number format. The current selection is PLC mode.
-- `main.cpp`: application entry point, HMI/TCP startup, SimConnect dispatch loop and reconnect attempts, Windows message handling, and worker-thread lifetime.
+- `main.cpp`: application entry point, HMI/TCP startup, SimConnect dispatch/retry or manual calculation ticks, Windows message handling, and worker-thread lifetime.
 - `DashboardModel.h/.cpp`: synchronized HMI telemetry, connection states, actuator values, message counts, and recent system events.
 - `HmiWindow.h/.cpp`: dependency-free Win32/GDI dashboard for the six-actuator platform, system statuses, aircraft attitude, and activity feed.
-- `SimConnectHandler.h/.cpp`: owns the SimConnect session, registers telemetry, dispatches callbacks, limits calculation frequency, and publishes the latest command.
+- `SimConnectHandler.h/.cpp`: owns the SimConnect session, registers telemetry, dispatches callbacks, and forwards orientation samples on the control schedule.
+- `MotionController.h/.cpp`: selects the source, applies manual input on Execute, schedules manual calculations, shares live/manual mapping and command generation, and owns the synchronized payload cache. No SDK or socket dependencies.
 - `BridgeTypes.h`: shared six-actuator array, platform attitude, and command types without Windows dependencies.
 - `MotionCalculator.h/.cpp`: simulator-to-platform angle mapping, platform mounting coordinates, calibration constants, actuator step/speed limits, and shared control interval. No SDK or networking dependencies.
 - `ControllerProtocol.h/.cpp`: PLC/Unity JSON encoding, six-value feedback validation, and buffered extraction of complete messages from TCP chunks. No socket or SDK dependencies.
@@ -37,6 +51,7 @@ PLC / Unity -> TCPServer -> ControllerProtocol -> position feedback
 - `tests/dashboard_model_tests.cpp`: platform-independent telemetry state and disconnect-reset checks.
 - `tests/motion_calculator_tests.cpp`: existing angle mapping, calibrated targets, actuator order, feedback-relative step limits, and speed regression checks.
 - `tests/controller_protocol_tests.cpp`: both output formats, feedback rejection, fragmented/combined messages, legacy framing, and stream reset checks; requires nlohmann/json.
+- `tests/motion_controller_tests.cpp`: manual execution without MSFS, source isolation, validation, feedback gating, cadence, and successive movement calculations; requires nlohmann/json.
 - `StuartServer.sln`: Visual Studio solution containing the server project.
 - `StuartClient.vcxproj`: primary Visual C++ build definition. Despite its filename, its project name is `StuartServer` and it builds the server sources.
 - `StuartClient.vcxproj.filters`: Visual Studio Solution Explorer grouping for the server source and header files.
@@ -50,23 +65,23 @@ PLC / Unity -> TCPServer -> ControllerProtocol -> position feedback
 Start with `main.cpp` to see the application's lifetime, then follow one sample:
 
 1. **Receive simulator data:** `SimConnectHandler::HandleDispatch` receives two SDK message types. Pitch and bank are radians; rudder is degrees. The structs at the top of the file must match the subscription field order.
-2. **Map the attitude:** `HandleOrientation` passes those values to `CalculatePlatformAttitude`. Raw HMI values keep simulator signs. Platform pitch and rudder are negated, all three angles are halved, and each is limited to +/-30 degrees. Rudder produces platform yaw; aircraft heading is not subscribed.
+2. **Map the attitude:** `HandleOrientation` passes those values to `MotionController::UpdateSimulatorInput`. Its shared mapping divides rudder by 1.5 before calling `CalculatePlatformAttitude`. Manual Execute converts pitch/roll degrees to radians and uses the same mapping. Raw HMI values keep simulator signs. Platform pitch and rudder are negated, all three angles are halved, and each is limited to +/-30 degrees. Rudder produces platform yaw; aircraft heading is not subscribed.
 3. **Calculate the legs:** `CalculateMotion` takes the platform attitude and a copy of the latest feedback. The geometry applies translation plus a rotated platform mounting point minus a base mounting point. The vector's length becomes a target in the existing controller reference system. Geometry uses yaw about Z, negative platform roll about Y, and platform pitch about X; preserve this established mapping.
 4. **Limit the move:** each target is at most 20 position units away from its feedback position per calculation. Speed is the limited distance divided by 0.05 seconds, bounded to 2..500. A level pose currently rounds to 201 on all six actuators, although the reference constant is 200. These are existing calibration results, not new physical-unit claims.
-5. **Publish and send:** `BuildCommandPayload` selects the configured JSON format. The handler replaces its cached payload under a mutex. The output worker copies it, and `TCPServer::sendData` adds a newline and handles partial socket sends.
+5. **Publish and send:** `BuildCommandPayload` selects the configured JSON format. `MotionController` replaces its cached payload under a mutex. The output worker copies it, and `TCPServer::sendData` adds a newline and handles partial socket sends.
 6. **Receive controller feedback:** `TCPServer::receiveData` reads bytes. `FeedbackStream` assembles complete messages. `TryParseFeedback` validates all six values before the server replaces its synchronized position array. The next calculation reads a copy of that array.
 
 The three threads have distinct jobs:
 
 | Thread | Owns/does | Shared data access |
 | --- | --- | --- |
-| Main | HMI message loop, SimConnect session, attitude mapping and motion calculation | Copies feedback; publishes the latest payload; updates dashboard |
+| Main | HMI controls/message loop, SimConnect session or manual calculation ticks, attitude mapping and motion calculation | Copies feedback; publishes the latest payload; updates dashboard |
 | Feedback worker | Blocking accept/receive, partial-message buffer, client reconnects | Replaces feedback under a mutex; updates dashboard |
 | Output worker | Nominal 50 ms send schedule and protocol send logging | Copies the payload under a mutex; updates dashboard |
 
 A **mutex** allows only one thread at a time into a protected section. Here it prevents partially copied arrays, JSON strings, and dashboard snapshots. An **atomic** is used for individual shared flags, such as the shutdown request. Neither makes a group of unrelated operations one transaction. Blocking socket calls stay off the main thread so the window can continue processing messages. Shutdown closes sockets before joining (waiting for) the workers, while their referenced objects are still alive.
 
-Keep changes in the layer that owns the responsibility: motion formulas in `MotionCalculator`, JSON contracts in `ControllerProtocol`, socket operations in `TCPServer`, simulator subscriptions in `SimConnectHandler`, and drawing in `HmiWindow`. The pure calculation/protocol tests let you check these rules without MSFS or a physical platform. Comments explain contracts, coordinate conventions, and ownership; ordinary C++ statements do not need a comment on every line.
+Keep changes in the layer that owns the responsibility: motion formulas in `MotionCalculator`, JSON contracts in `ControllerProtocol`, socket operations in `TCPServer`, simulator subscriptions in `SimConnectHandler`, source selection and command scheduling in `MotionController`, and UI controls/drawing in `HmiWindow`. The pure calculation/protocol tests let you check these rules without MSFS or a physical platform. Comments explain contracts, coordinate conventions, and ownership; ordinary C++ statements do not need a comment on every line.
 
 ## Protocols
 
@@ -91,11 +106,11 @@ The HMI opens as soon as the executable starts; a PLC connection is not required
 - Current position, commanded target, and commanded speed for all six actuators.
 - Recent startup, connection, feedback rejection, error, and shutdown messages that also provide the operational context previously available only in the console. Attitude scaling and clamping do not emit warnings; their results remain visible in the raw/target cards.
 
-The window title is "Flight Simulator Motion HMI". In the platform view, drag with the left mouse button to orbit, use the mouse wheel to zoom, and double-click to reset the camera. These controls affect only the view; the drawing is illustrative, not a physical geometry measurement.
+The window title is "Flight Simulator Motion HMI". The input-source selector and manual fields sit below the status cards. These native controls match the dark dashboard with padded, rounded fields, visible focus/hover states, a dark dropdown, and a cyan Execute button when enabled. Disabled controls use muted colors; keyboard selection, tab navigation, and text editing retain native Windows behavior. In the platform view, drag with the left mouse button to orbit, use the mouse wheel to zoom, and double-click to reset the camera. These controls affect only the view; the drawing is illustrative, not a physical geometry measurement.
 
-Both sides of the cards update without a PLC/Unity client or position feedback. Pitch, roll, and platform targets update on the existing nominal 20 Hz calculation schedule; raw rudder updates when its separate SimConnect message arrives. Cards show placeholders until their required samples arrive and after SimConnect disconnects, including while waiting for new samples on reconnect. The orbit view continues to use the existing processed platform attitude shown in the target column. No barrel-roll return curve has been implemented.
+In live MSFS mode, both sides of the cards update without a PLC/Unity client or position feedback. Pitch, roll, and platform targets update on the existing nominal 20 Hz calculation schedule; raw rudder updates when its separate SimConnect message arrives. Cards show placeholders until their required samples arrive and after SimConnect disconnects, including while waiting for new samples on reconnect. The orbit view continues to use the existing processed platform attitude shown in the target column. No barrel-roll return curve has been implemented.
 
-Closing the HMI performs the same orderly worker, socket, and SimConnect shutdown as closing the application. If MSFS is not running at startup, the bridge keeps the HMI available and retries SimConnect every five seconds.
+Closing the HMI performs the same orderly worker, socket, and SimConnect shutdown as closing the application. If MSFS is not running at startup, the bridge keeps the HMI available and retries SimConnect every five seconds while MSFS input is selected. Manual input suspends those retries.
 
 ## Safety and review notes
 
@@ -103,7 +118,7 @@ Closing the HMI performs the same orderly worker, socket, and SimConnect shutdow
 - Output remains disabled until the connected client supplies its first valid six-value position message. A reconnected client must supply fresh feedback before commands resume.
 - Motion constants such as attitude limits, maximum step, minimum speed, and maximum speed are grouped at the top of `MotionCalculator.cpp` for review and tuning.
 - The geometry implementation in `calculate_legs.cpp` is independent of Windows, sockets, and SimConnect. The HMI drawing is illustrative and does not measure platform orientation.
-- The feedback gate has no age timeout. Cached commands are retained across simulator loss or client reconnect; this cleanup preserves that behavior. Unit tests do not establish safe physical operation.
+- The feedback gate has no age timeout. Cached commands are retained across simulator loss or client reconnect, but cleared when changing input sources. Unit tests do not establish safe physical operation.
 - Protocol logs are appended to `logs/FlightSim_StewartServer_Log.txt`; the directory is created automatically.
 
 ## Building
@@ -117,27 +132,30 @@ The geometry, motion, and dashboard-model checks do not require SimConnect and c
 ```shell
 cmake -S . -B build -DBUILD_TESTING=ON -DCMAKE_BUILD_TYPE=Debug
 cmake --build build --config Debug --target calculate_legs_tests dashboard_model_tests motion_calculator_tests
-ctest --test-dir build -C Debug --output-on-failure -E controller_protocol_tests
+ctest --test-dir build -C Debug --output-on-failure -E "controller_protocol_tests|motion_controller_tests"
 ```
 
 Use Debug because the existing dashboard tests use assertions. With Visual Studio, `--config Debug` and `-C Debug` select the configuration; `CMAKE_BUILD_TYPE` applies to single-configuration generators.
 
-To include protocol tests, install nlohmann/json or configure `NLOHMANN_JSON_INCLUDE_DIR` to the include directory containing `nlohmann/json.hpp`. This is a local CMake cache setting, not a machine-specific source change. When found, also build `controller_protocol_tests` before running CTest; otherwise configuration reports that protocol tests are skipped. The application uses this include setting too, but CMake still does not configure SimConnect discovery/linking.
+To include protocol tests, install nlohmann/json or configure `NLOHMANN_JSON_INCLUDE_DIR` to the include directory containing `nlohmann/json.hpp`. This is a local CMake cache setting, not a machine-specific source change. When found, also build `controller_protocol_tests` and `motion_controller_tests` before running CTest; otherwise configuration reports that both suites are skipped. The application uses this include setting too, but CMake still does not configure SimConnect discovery/linking.
 
-With the JSON dependency available, run the additional suite and then all tests:
+With the JSON dependency available, run the additional suites and then all tests:
 
 ```shell
-cmake --build build --config Debug --target controller_protocol_tests
+cmake --build build --config Debug --target controller_protocol_tests motion_controller_tests
 ctest --test-dir build -C Debug --output-on-failure
 ```
 
 The September 2026 cleanup was checked with Debug/Release x64 builds, all four test suites, and 5,324 exact comparisons against the original motion calculation. Temporary PLC and Unity builds bound to loopback received live MSFS telemetry and passed feedback rejection, fragmented/combined/legacy messages, reconnect gating, and HMI-close shutdown checks. Short command-stream samples measured 20.1 Hz and 20.0 Hz respectively. No physical platform was operated; startup without MSFS and simulator loss/reconnect were not exercised in that run.
 
+Manual-input validation in September 2026: Debug/Release x64 builds and all five test suites passed. Temporary PLC and Unity builds bound only to loopback, with SimConnect_Open deliberately bypassed to simulate an unavailable simulator, passed native UI startup, feedback gating, invalid-input rejection, Execute, draft isolation, input mapping, step limits, fragmented/combined feedback, reconnect gating, source switching, resize, and HMI-close shutdown checks. Short streams measured about 19.8 Hz in both modes. A separate loopback Unity run passed live MSFS -> manual -> live MSFS switching, and the UI was visually checked at minimum window size. This did not operate physical hardware or test actual MSFS process shutdown/restart.
+
 ## Manual validation checklist
 
 - Build Debug x64 and Release x64 on Windows.
 - Verify the English window title, orbit dragging (including releasing outside the view), wheel zoom limits, double-click reset, and resizing without the platform overlapping the attitude section.
-- Start and stop MSFS/SimConnect cleanly.
+- Start and stop MSFS/SimConnect cleanly. Switch from live MSFS to manual and back.
+- With MSFS stopped, select manual, enter pitch/roll/rudder degrees, and Execute using a simulated controller first. Verify draft edits and rejected inputs leave the applied target unchanged; select level and Execute to return toward level.
 - With MSFS 2020 connected and no PLC/Unity client, verify raw pitch, roll, and rudder cards update. Roll through inverted and confirm values beyond +/-30 degrees remain visible. Check placeholders on simulator disconnect and until fresh samples arrive after reconnect.
 - Connect, disconnect, and reconnect the selected PLC or Unity client.
 - Measure the nominal 20 Hz newline-delimited command stream; Windows scheduling is not a hard real-time guarantee.

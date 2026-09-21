@@ -3,6 +3,7 @@
 #include "HmiWindow.h"
 #include "ProtocolLogger.h"
 #include "MotionCalculator.h"
+#include "MotionController.h"
 #include "SimConnectHandler.h"
 #include "TCPServer.h"
 
@@ -31,14 +32,16 @@ void PrintStartupBanner() {
         << "========================================\n";
 }
 
-bool ProcessWindowsMessages() {
+bool ProcessWindowsMessages(HmiWindow& hmi) {
     MSG message;
     while (PeekMessage(&message, nullptr, 0, 0, PM_REMOVE)) {
         if (message.message == WM_QUIT) {
             return false;
         }
-        TranslateMessage(&message);
-        DispatchMessage(&message);
+        if (!hmi.ProcessControlMessage(message)) {
+            TranslateMessage(&message);
+            DispatchMessage(&message);
+        }
     }
     return true;
 }
@@ -62,7 +65,7 @@ void FeedbackThreadMethod(TCPServer& server, const std::atomic<bool>& stopReques
 
 void OutputThreadMethod(
     TCPServer& server,
-    const SimConnectHandler& simulator,
+    const MotionController& motion,
     DashboardModel& dashboard,
     const std::atomic<bool>& stopRequested) {
     auto nextWakeup = std::chrono::steady_clock::now();
@@ -74,7 +77,7 @@ void OutputThreadMethod(
         // This gate requires a first valid sample, not a feedback-age watchdog.
         if (server.isConnected()
             && server.hasPositionFeedback()
-            && simulator.TryGetLatestPayload(payload)) {
+            && motion.TryGetLatestPayload(payload)) {
             if (server.sendData(payload)) {
                 LogProtocolMessage("SEND", payload);
                 dashboard.RecordCommandSent();
@@ -97,16 +100,17 @@ int main() {
     PrintStartupBanner();
 
     DashboardModel dashboard;
+    MotionController motion(dashboard);
     dashboard.AddEvent(std::string("Motion bridge started in ") + ACTIVE_TARGET_NAME + " mode");
 
-    HmiWindow hmi(dashboard, ACTIVE_TARGET_NAME, ACTIVE_BIND_IP, ACTIVE_PORT);
+    HmiWindow hmi(dashboard, motion, ACTIVE_TARGET_NAME, ACTIVE_BIND_IP, ACTIVE_PORT);
     if (!hmi.Create(GetModuleHandle(nullptr), SW_SHOWDEFAULT)) {
         std::cerr << "[HMI] Unable to create the dashboard window." << std::endl;
         return 1;
     }
 
     TCPServer server(ACTIVE_BIND_IP, ACTIVE_PORT, &dashboard);
-    SimConnectHandler simulator(server, &dashboard);
+    SimConnectHandler simulator(server, motion, &dashboard);
     std::atomic<bool> stopRequested{ false };
     // Blocking accept/receive and send use separate workers so the HMI and
     // SimConnect dispatch remain responsive on this main thread.
@@ -114,7 +118,7 @@ int main() {
     std::thread outputThread(
         OutputThreadMethod,
         std::ref(server),
-        std::cref(simulator),
+        std::cref(motion),
         std::ref(dashboard),
         std::cref(stopRequested));
 
@@ -123,8 +127,16 @@ int main() {
 
     auto nextSimConnectAttempt = std::chrono::steady_clock::now();
 
-    while (!simulator.QuitRequested() && ProcessWindowsMessages()) {
+    while (!simulator.QuitRequested() && ProcessWindowsMessages(hmi)) {
         const auto now = std::chrono::steady_clock::now();
+        if (motion.IsManualMode()) {
+            if (simulator.IsConnected()) {
+                simulator.CloseSimConnect();
+            }
+            motion.TickManual(server.isConnected() && server.hasPositionFeedback(), server.getCurrentPositions(), now);
+            Sleep(5);
+            continue;
+        }
         if (!simulator.IsConnected() && now >= nextSimConnectAttempt) {
             simulator.InitializeSimConnect();
             nextSimConnectAttempt = now + SimConnectRetryInterval;
@@ -143,7 +155,7 @@ int main() {
     dashboard.AddEvent("Application shutdown requested");
     stopRequested = true;
     // Closing sockets interrupts blocking network calls before we join workers.
-    // The server and simulator must outlive both workers.
+    // The server and motion controller must outlive both workers.
     server.closeConnection();
 
     if (outputThread.joinable()) {

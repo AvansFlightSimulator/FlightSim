@@ -1,12 +1,11 @@
 #include "SimConnectHandler.h"
 
-#include "ControllerProtocol.h"
+#include "MotionController.h"
 #include "DashboardModel.h"
 #include "MotionCalculator.h"
 #include "TCPServer.h"
 
 #include <iostream>
-#include <utility>
 
 namespace {
     // These layouts and field order must match the SDK data definitions below.
@@ -23,8 +22,9 @@ namespace {
     enum DataRequestId { REQUEST_ORIENTATION, REQUEST_RUDDER };
 }
 
-SimConnectHandler::SimConnectHandler(TCPServer& server, DashboardModel* dashboard)
+SimConnectHandler::SimConnectHandler(TCPServer& server, MotionController& motion, DashboardModel* dashboard)
     : server_(server),
+      motion_(motion),
       dashboard_(dashboard),
       nextCalculation_(std::chrono::steady_clock::now()) {
 }
@@ -86,40 +86,8 @@ void SimConnectHandler::HandleDispatch(SIMCONNECT_RECV* data) {
 }
 
 void SimConnectHandler::HandleOrientation(double pitchRadians, double bankRadians) {
-    // Raw cards preserve MSFS signs. The target cards use the motion mapping.
-    const auto attitude = CalculatePlatformAttitude(pitchRadians, bankRadians, rudderDeflectionDegrees_);
-    if (dashboard_) {
-        dashboard_->UpdateSimulatorAttitude(RadiansToDegrees(pitchRadians), RadiansToDegrees(bankRadians));
-        dashboard_->UpdateOrientation(attitude.pitchDegrees, attitude.rollDegrees, attitude.yawDegrees);
-    }
-
-    // Telemetry remains visible before a controller connects. Actuator commands
-    // require feedback because step limits are relative to actual leg positions.
-    if (!server_.hasPositionFeedback()) {
-        return;
-    }
-    const auto command = CalculateMotion(attitude, server_.getCurrentPositions());
-    if (dashboard_) {
-        dashboard_->UpdateMotion(
-            attitude.pitchDegrees, attitude.rollDegrees, attitude.yawDegrees,
-            command.positions, command.speeds);
-    }
-    PublishPayload(BuildCommandPayload(command));
-}
-
-void SimConnectHandler::PublishPayload(std::string payload) {
-    std::lock_guard<std::mutex> lock(payloadMutex_);
-    latestPayload_ = std::move(payload);
-}
-
-bool SimConnectHandler::TryGetLatestPayload(std::string& payload) const {
-    std::lock_guard<std::mutex> lock(payloadMutex_);
-    if (latestPayload_.empty()) {
-        return false;
-    }
-
-    payload = latestPayload_;
-    return true;
+    motion_.UpdateSimulatorInput(pitchRadians, bankRadians, rudderDeflectionDegrees_,
+        server_.hasPositionFeedback(), server_.getCurrentPositions());
 }
 
 bool SimConnectHandler::QuitRequested() const noexcept {

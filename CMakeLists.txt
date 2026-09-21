@@ -8,6 +8,8 @@ endif()
 add_executable(FlightSim
     BridgeTypes.h
     MotionCalculator.h
+    MotionController.h
+    MotionController.cpp
     ControllerProtocol.h
     MotionCalculator.cpp
     ControllerProtocol.cpp
@@ -71,6 +73,19 @@ if(BUILD_TESTING)
     add_test(NAME motion_calculator_tests COMMAND motion_calculator_tests)
 
     if(NLOHMANN_JSON_INCLUDE_DIR)
+        add_executable(motion_controller_tests
+            MotionController.cpp
+            MotionCalculator.cpp
+            calculate_legs.cpp
+            DashboardModel.cpp
+            ControllerProtocol.cpp
+            tests/motion_controller_tests.cpp
+        )
+        target_compile_features(motion_controller_tests PRIVATE cxx_std_14)
+        target_include_directories(motion_controller_tests PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}" "${NLOHMANN_JSON_INCLUDE_DIR}")
+        add_test(NAME motion_controller_tests COMMAND motion_controller_tests)
+
         add_executable(controller_protocol_tests
             ControllerProtocol.cpp
             tests/controller_protocol_tests.cpp
@@ -80,6 +95,6 @@ if(BUILD_TESTING)
             "${CMAKE_CURRENT_SOURCE_DIR}" "${NLOHMANN_JSON_INCLUDE_DIR}")
         add_test(NAME controller_protocol_tests COMMAND controller_protocol_tests)
     else()
-        message(STATUS "Protocol tests skipped: set NLOHMANN_JSON_INCLUDE_DIR to the folder containing nlohmann/json.hpp")
+        message(STATUS "Protocol and motion-controller tests skipped: set NLOHMANN_JSON_INCLUDE_DIR to the folder containing nlohmann/json.hpp")
     endif()
 endif()

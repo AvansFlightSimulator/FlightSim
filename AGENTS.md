@@ -60,6 +60,27 @@ connection: clear responsibilities, useful comments, fewer redundant helpers, an
 separate files where appropriate. Motion/protocol behavior must remain unchanged
 unless separately agreed. README contains a student reading guide and thread map.
 
+## Manual input milestone
+
+The owner requested manual HMI control without an MSFS connection and chose
+**simulated MSFS inputs**, rather than direct platform target angles. The HMI now
+has an MSFS/manual selector, pitch/roll/rudder degree fields, and Execute. Selecting
+manual closes SimConnect and suspends retries without requesting a move. Execute
+requires a connected controller with valid position feedback and applies all three
+finite inputs together. Edits remain drafts until Execute. Manual calculations run
+on the main loop every nominal 50 ms using the same geometry and feedback-relative
+step/speed limits. Cards compare applied INPUT with TARGET in manual mode; no raw
+simulator telemetry is fabricated. Source changes clear the payload and applied
+manual input; returning to manual requires Execute again. The applied manual target
+is retained across controller reconnect, with output gated on new valid feedback.
+Source selection does not cancel commands already sent or command a physical stop.
+
+The preexisting local rudder division by 1.5 is preserved in the shared input mapping
+in MotionController, before MotionCalculator's negation/halving/clamping. Thus manual
+pitch 20, roll -40, rudder 12 requests targets -10, -20, -4 degrees. This does not
+implement the still-unspecified future rudder scaling or inverted-return curve.
+Manual mode still requires the SimConnect SDK/runtime to build/load the application.
+
 ## Working with the owner
 
 - Read this guide and `README.md` before making changes; inspect the relevant
@@ -74,19 +95,23 @@ unless separately agreed. README contains a student reading guide and thread map
 ## Architecture and file map
 
 ```text
-MSFS -> SimConnect -> attitude conversion -> Stewart geometry -> latest payload
+MSFS -> SimConnect -------+
+HMI manual input --------+-> MotionController -> Stewart geometry -> latest payload
                                                                   |
 PLC / Unity <- newline-delimited JSON <- TCP output worker (20 Hz) -+
 PLC / Unity -> position feedback -> TCP receive worker -> motion calculation
 All components -> synchronized DashboardModel -> Win32/GDI HMI
 ```
 
-- `main.cpp`: HMI startup, Windows message loop, SimConnect dispatch/retry,
+- `main.cpp`: HMI startup, Windows message loop, SimConnect dispatch/retry or manual ticks,
   output and feedback threads, and shutdown.
 - `BuildMode.h`: compile-time target selection, bind addresses, ports, and PLC
   number formatting. Exactly one of `TARGET_PLC` and `TARGET_UNITY` must be set.
 - `SimConnectHandler.h/.cpp`: owns the SimConnect handle, subscriptions, dispatch,
-  calculation scheduling, dashboard updates, and synchronized latest-payload cache.
+  live sample scheduling, and raw rudder dashboard updates.
+- `MotionController.h/.cpp`: shared live/manual mapping, source selection, manual
+  execution/scheduling, dashboard updates, and synchronized latest-payload cache;
+  independent of SimConnect and Winsock.
 - `BridgeTypes.h`: common actuator count/array, platform attitude, and command types.
 - `MotionCalculator.h/.cpp`: pure attitude mapping and motion calculations, physical
   mounting coordinates, calibration/limits, and shared 50 ms control interval.
@@ -105,11 +130,12 @@ All components -> synchronized DashboardModel -> Win32/GDI HMI
   only the visualization.
 - `ProtocolLogger.h/.cpp`: synchronized protocol logging to
   `logs/FlightSim_StewartServer_Log.txt`, relative to the working directory.
-- `tests/`: standalone geometry, dashboard-model, motion-calculator, and protocol
-  test executables. Protocol tests require nlohmann/json; the others do not.
+- `tests/`: standalone geometry, dashboard-model, motion-calculator, motion-controller,
+  and protocol tests. Motion-controller and protocol tests require nlohmann/json.
 
 The HMI opens before external systems connect. SimConnect connection attempts
-repeat every five seconds when unavailable. The feedback worker accepts a new
+repeat every five seconds when unavailable and MSFS input is selected; manual mode
+suspends the session and retries. The feedback worker accepts a new
 client after a disconnect. Closing the HMI initiates worker/socket/SimConnect
 cleanup; a simulator quit event also ends the application.
 
@@ -134,7 +160,7 @@ cleanup; a simulator quit event also ends the application.
 - Output requires a connected client, valid position feedback for that connection,
   and an available payload. Disconnect resets the feedback gate.
 - Pitch is negated and converted from radians; bank is converted from radians;
-  yaw comes from negated rudder deflection, not aircraft heading. Each attitude
+  yaw comes from rudder deflection divided by 1.5 before negation/halving, not aircraft heading. Each attitude
   axis is clamped to +/-30 degrees. Geometry receives yaw, negated roll, pitch.
 - Current constants include neutral position 200, base leg length
   1156.372420286821, start height 1079, maximum step rate 400 per second
@@ -143,7 +169,7 @@ cleanup; a simulator quit event also ends the application.
 
 Do not describe the feedback gate as a freshness watchdog: no feedback-age timeout
 currently disables output. The cached payload is not cleared on simulator loss or
-client reconnect. Existing unit tests do not establish safe physical operation.
+client reconnect, but is cleared when changing input sources. Existing unit tests do not establish safe physical operation.
 These are implementation limitations, not an agreed feature backlog.
 
 ## Build and validation
@@ -177,7 +203,7 @@ test relies on assertions, which Release builds may disable:
 ```powershell
 cmake -S . -B build -DBUILD_TESTING=ON -DCMAKE_BUILD_TYPE=Debug
 cmake --build build --config Debug --target calculate_legs_tests dashboard_model_tests motion_calculator_tests
-ctest --test-dir build -C Debug --output-on-failure -E controller_protocol_tests
+ctest --test-dir build -C Debug --output-on-failure -E "controller_protocol_tests|motion_controller_tests"
 ```
 
 `CMAKE_BUILD_TYPE` applies to single-configuration generators; `--config` and
@@ -187,10 +213,11 @@ ctest --test-dir build -C Debug --output-on-failure -E controller_protocol_tests
   boundary poses. Dashboard tests check telemetry updates and disconnect state.
   Motion tests preserve current mapping, step/speed limits, and actuator order.
   The current level-pose calibration rounds to 201, despite reference position 200.
-- When nlohmann/json is found, build controller_protocol_tests before CTest. It
+- When nlohmann/json is found, build controller_protocol_tests and motion_controller_tests before CTest. It
   checks both PLC formats, Unity, malformed feedback, fragmentation, combined
   messages, legacy framing, and stream reset; it does not require Windows or MSFS.
-  Then run CTest without the -E exclusion to execute all four suites.
+  Then run CTest without the -E exclusion to execute all five suites. Motion-controller tests cover manual execution without MSFS,
+  input mapping/validation, feedback gating, source isolation, cadence, and repeated motion steps.
 - For relevant runtime changes, validate startup without MSFS/client, reconnects,
   orderly shutdown, feedback gating, fragmented/combined messages, and nominal
   20 Hz output. Exercise both target modes when changing shared protocol code.
@@ -203,6 +230,16 @@ and Unity builds bound to loopback received live MSFS telemetry and passed
 feedback rejection/framing, reconnect gating, and HMI-close shutdown checks.
 Short output samples measured 20.1 Hz (PLC) and 20.0 Hz (Unity). Physical hardware,
 startup without MSFS, and simulator loss/reconnect were not validated in that run.
+
+Manual-input validation in September 2026: Debug/Release x64 builds and all five
+unit suites passed. Temporary PLC and Unity builds bound to loopback with SimConnect
+connection deliberately bypassed (simulated unavailable MSFS) passed native UI startup,
+Execute, draft isolation, invalid-input rejection, mapping, step limits, feedback
+framing/gating, reconnects, source changes, resize, and HMI-close shutdown. Short
+output samples measured about 19.8 Hz in both modes. A separate loopback Unity run
+passed live MSFS -> manual -> live MSFS switching; the UI was visually checked at
+minimum size. Physical hardware and actual MSFS process shutdown/restart were not
+validated in that run.
 
 ## Change conventions
 

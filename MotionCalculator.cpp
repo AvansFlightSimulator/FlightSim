@@ -61,8 +61,7 @@ PlatformAttitude CalculatePlatformAttitude(
     return attitude;
 }
 
-MotionCommand CalculateMotion(
-    const PlatformAttitude& attitude, const ActuatorValues& currentPositions) {
+MotionCommand CalculateMotion(const PlatformAttitude& attitude, const ActuatorValues& currentPositions) {
     constexpr float controlStepSeconds = 1.0f / MotionSettings::ControlRateHz;
     constexpr float maximumStep = MaximumStepPerSecond * controlStepSeconds;
     MotionCommand command;

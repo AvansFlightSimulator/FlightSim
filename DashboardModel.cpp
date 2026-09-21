@@ -8,6 +8,21 @@ DashboardModel::DashboardModel()
     : startTime_(std::chrono::steady_clock::now()) {
 }
 
+void DashboardModel::SetManualMode(bool manual) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    state_.manualMode = manual;
+    state_.manualInputAvailable = false;
+    state_.motionAvailable = false;
+    state_.targetPositions = {};
+    state_.speeds = {};
+}
+
+void DashboardModel::SetManualInput(const SimulatorInput& input) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    state_.manualInput = input;
+    state_.manualInputAvailable = true;
+}
+
 void DashboardModel::SetSimulatorConnected(bool connected) {
     std::lock_guard<std::mutex> lock(mutex_);
     state_.simulatorConnected = connected;

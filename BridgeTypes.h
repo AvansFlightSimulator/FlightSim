@@ -8,6 +8,13 @@
 constexpr std::size_t ActuatorCount = 6;
 using ActuatorValues = std::array<float, ActuatorCount>;
 
+// Manual input uses the raw MSFS signs and degrees, including rudder (not heading).
+struct SimulatorInput {
+    double pitchDegrees = 0.0;
+    double rollDegrees = 0.0;
+    double rudderDegrees = 0.0;
+};
+
 // Calculated platform targets in degrees, not measured platform orientation.
 struct PlatformAttitude {
     double pitchDegrees = 0.0;
