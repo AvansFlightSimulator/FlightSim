@@ -11,9 +11,10 @@
 namespace {
 constexpr double DegreesToRadians = 3.14159265358979323846 / 180.0;
 
-PlatformAttitude MapSimulatorInput(double pitchRadians, double bankRadians, double rudderDegrees) {
+PlatformAttitude MapSimulatorInput(const SimulatorInput& input) {
     // Preserve the live path's existing extra rudder adjustment for both sources.
-    return CalculatePlatformAttitude(pitchRadians, bankRadians, rudderDegrees / 1.5);
+    return CalculatePlatformAttitude(input.pitchDegrees * DegreesToRadians,
+        input.rollDegrees * DegreesToRadians, input.rudderDegrees / 1.5);
 }
 }
 
@@ -30,6 +31,7 @@ void MotionController::SetInputMode(InputMode mode) {
     }
     inputMode_ = mode;
     manualInputActive_ = false;
+    simulatorInputFilter_.Reset();
     // A source change must not reuse the previous source's cached command.
     {
         std::lock_guard<std::mutex> lock(payloadMutex_);
@@ -96,8 +98,7 @@ bool MotionController::ExecuteManualInput(const SimulatorInput& input) {
             DashboardEventLevel::Warning);
         return false;
     }
-    manualAttitude_ = MapSimulatorInput(input.pitchDegrees * DegreesToRadians,
-        input.rollDegrees * DegreesToRadians, input.rudderDegrees);
+    manualAttitude_ = MapSimulatorInput(input);
     manualInputActive_ = true;
     // Keep the existing 50 ms calculation cadence even across repeated clicks.
     dashboard_.SetManualInput(input);
@@ -128,12 +129,29 @@ void MotionController::TickManual(bool hasFeedback, const ActuatorValues& curren
 }
 
 void MotionController::UpdateSimulatorInput(double pitchRadians, double bankRadians, double rudderDegrees,
-    bool hasFeedback, const ActuatorValues& currentPositions) {
+    bool hasFeedback, const ActuatorValues& currentPositions, std::chrono::steady_clock::time_point now) {
     if (inputMode_ != InputMode::Simulator) {
         return;
     }
-    dashboard_.UpdateSimulatorAttitude(RadiansToDegrees(pitchRadians), RadiansToDegrees(bankRadians));
-    UpdateAttitude(MapSimulatorInput(pitchRadians, bankRadians, rudderDegrees), hasFeedback, currentPositions);
+    const SimulatorInput rawInput{
+        RadiansToDegrees(pitchRadians), RadiansToDegrees(bankRadians), rudderDegrees
+    };
+    if (!std::isfinite(rawInput.pitchDegrees) || !std::isfinite(rawInput.rollDegrees)
+        || !std::isfinite(rawInput.rudderDegrees)) {
+        return;
+    }
+
+    // Keep diagnostics raw while only the command path receives smoothed input.
+    dashboard_.UpdateSimulatorAttitude(rawInput.pitchDegrees, rawInput.rollDegrees);
+    SimulatorInput filteredInput;
+    if (!simulatorInputFilter_.Update(rawInput, now, filteredInput)) {
+        return;
+    }
+    UpdateAttitude(MapSimulatorInput(filteredInput), hasFeedback, currentPositions);
+}
+
+void MotionController::ResetSimulatorInputFilter() noexcept {
+    simulatorInputFilter_.Reset();
 }
 
 void MotionController::UpdateAttitude(const PlatformAttitude& attitude,

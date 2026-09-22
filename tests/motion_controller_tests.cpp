@@ -10,10 +10,62 @@
 #include <nlohmann/json.hpp>
 
 namespace {
+constexpr double Pi = 3.14159265358979323846;
+
 void Require(bool condition, const char* message) {
     if (!condition) {
         throw std::runtime_error(message);
     }
+}
+
+void CheckSimulatorInputFiltering() {
+    DashboardModel dashboard;
+    MotionController motion(dashboard);
+    const ActuatorValues feedback{{200, 200, 200, 200, 200, 200}};
+    const auto start = std::chrono::steady_clock::time_point{};
+    const double degreesToRadians = Pi / 180.0;
+
+    motion.UpdateSimulatorInput(2.0 * degreesToRadians, 2.0 * degreesToRadians, 2.0,
+        false, feedback, start);
+    auto snapshot = dashboard.GetSnapshot();
+    Require(std::fabs(snapshot.simulatorPitchDegrees - 2.0) < 1e-9
+        && std::fabs(snapshot.simulatorRollDegrees - 2.0) < 1e-9,
+        "Raw simulator diagnostics must remain unfiltered");
+    Require(std::fabs(snapshot.pitchDegrees + 1.0) < 1e-9
+        && std::fabs(snapshot.rollDegrees - 1.0) < 1e-9
+        && std::fabs(snapshot.yawDegrees + 2.0 / 3.0) < 1e-9,
+        "First simulator sample must initialize without easing from zero");
+
+    motion.UpdateSimulatorInput(2.04 * degreesToRadians, 2.04 * degreesToRadians, 2.04,
+        false, feedback, start + std::chrono::milliseconds(50));
+    snapshot = dashboard.GetSnapshot();
+    const double timeConstantSeconds =
+        std::chrono::duration<double>(SimulatorFilterSettings::TimeConstant).count();
+    const double alpha = 1.0 - std::exp(-0.05 / timeConstantSeconds);
+    const double expectedFiltered = 2.0 + alpha * 0.04;
+    Require(std::fabs(snapshot.simulatorPitchDegrees - 2.04) < 1e-9,
+        "Raw simulator display must show the latest noisy sample");
+    Require(std::fabs(snapshot.pitchDegrees + expectedFiltered / 2.0) < 1e-9
+        && std::fabs(snapshot.rollDegrees - expectedFiltered / 2.0) < 1e-9
+        && std::fabs(snapshot.yawDegrees + expectedFiltered / 3.0) < 1e-9,
+        "Filtered live values must feed the existing mapping before geometry");
+
+    const auto beforeInvalid = snapshot;
+    motion.UpdateSimulatorInput(std::numeric_limits<double>::quiet_NaN(), 0.0, 0.0,
+        false, feedback, start + std::chrono::milliseconds(100));
+    snapshot = dashboard.GetSnapshot();
+    Require(snapshot.simulatorPitchDegrees == beforeInvalid.simulatorPitchDegrees
+        && snapshot.pitchDegrees == beforeInvalid.pitchDegrees,
+        "Nonfinite live input must leave raw and filtered state unchanged");
+
+    motion.ResetSimulatorInputFilter();
+    motion.UpdateSimulatorInput(10.0 * degreesToRadians, -8.0 * degreesToRadians, 6.0,
+        false, feedback, start + std::chrono::seconds(1));
+    snapshot = dashboard.GetSnapshot();
+    Require(std::fabs(snapshot.pitchDegrees + 5.0) < 1e-9
+        && std::fabs(snapshot.rollDegrees + 4.0) < 1e-9
+        && std::fabs(snapshot.yawDegrees + 2.0) < 1e-9,
+        "Reset must make the next valid live sample initialize immediately");
 }
 
 void CheckManualControl() {
@@ -193,9 +245,10 @@ void CheckActuatorControl() {
 
 int main() {
     try {
+        CheckSimulatorInputFiltering();
         CheckManualControl();
         CheckActuatorControl();
-        std::cout << "Manual source, scheduling, mapping, and feedback checks passed.\n";
+        std::cout << "Live filtering, manual source, scheduling, mapping, and feedback checks passed.\n";
         return 0;
     }
     catch (const std::exception& exception) {

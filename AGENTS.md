@@ -40,7 +40,7 @@ The owner requested raw MSFS 2020 data in the existing pitch/roll/yaw card area
 to observe simulator angles before deciding motion behavior. At the owner's
 request, each card now compares raw MSFS degrees on the left with calculated
 platform target degrees on the right. Raw pitch, bank/roll, and rudder retain
-simulator signs without motion scaling or clamping; targets use the existing
+simulator signs without motion scaling or clamping; targets use the filtered,
 processed attitude. These targets are not measured platform orientation. The
 third card is labeled RUDDER / YAW because it compares rudder input with derived
 platform yaw; the bridge does not subscribe to aircraft heading/yaw. Separate synchronized raw
@@ -117,11 +117,11 @@ valid feedback. Unity retains its two modes and unchanged protocol.
 ## Architecture and file map
 
 ```text
-MSFS -> SimConnect -------+
-HMI manual angles ------+-> MotionController -> Stewart geometry -> step limits -> payload
-HMI A1-A6 positions -------> MotionController ---------------------> step limits -> payload
-                                                                  |
-PLC / Unity <- newline-delimited JSON <- TCP output worker (20 Hz) -+
+MSFS -> SimConnect -> MotionController [live input filter] -> Stewart geometry -> step limits -> payload
+HMI manual angles -----> MotionController -------------------> Stewart geometry -> step limits -> payload
+HMI A1-A6 positions ---> MotionController ---------------------------------------> step limits -> payload
+                                                                                               |
+PLC / Unity <- newline-delimited JSON <- TCP output worker (20 Hz) <----------------------------+
 PLC / Unity -> position feedback -> TCP receive worker -> motion calculation
 All components -> synchronized DashboardModel -> Win32/GDI HMI
 ```
@@ -133,8 +133,10 @@ All components -> synchronized DashboardModel -> Win32/GDI HMI
 - `SimConnectHandler.h/.cpp`: owns the SimConnect handle, subscriptions, dispatch,
   live sample scheduling, and raw rudder dashboard updates.
 - `MotionController.h/.cpp`: shared live/manual angle mapping, three-source selection, manual
-  angle/actuator execution and scheduling, dashboard updates, and synchronized latest-payload cache;
+  angle/actuator execution and scheduling, live-filter integration, dashboard updates, and synchronized latest-payload cache;
   independent of SimConnect and Winsock.
+- `SimulatorInputFilter.h/.cpp`: pure time-based exponential smoothing for finite live-MSFS
+  pitch, bank, and rudder samples. Manual modes do not use this filter.
 - `BridgeTypes.h`: common actuator count/array, platform attitude, and command types.
 - `MotionCalculator.h/.cpp`: pure attitude mapping and motion calculations, physical
   mounting coordinates, calibration, shared geometric/direct actuator limits, and 50 ms control interval.
@@ -153,8 +155,8 @@ All components -> synchronized DashboardModel -> Win32/GDI HMI
   only the visualization.
 - `ProtocolLogger.h/.cpp`: synchronized protocol logging to
   `logs/FlightSim_StewartServer_Log.txt`, relative to the working directory.
-- `tests/`: standalone geometry, dashboard-model, motion-calculator, motion-controller,
-  and protocol tests. Motion-controller and protocol tests require nlohmann/json.
+- `tests/`: standalone geometry, dashboard-model, motion-calculator, simulator-input-filter,
+  motion-controller, and protocol tests. Motion-controller and protocol tests require nlohmann/json.
 
 The HMI opens before external systems connect. SimConnect connection attempts
 repeat every five seconds when unavailable and MSFS input is selected; manual mode
@@ -180,6 +182,10 @@ cleanup; a simulator quit event also ends the application.
   unchanged. TCP reads may contain partial or multiple messages.
 - Calculations run at most every 50 ms. A separate output worker sends the latest
   payload on a nominal 50 ms schedule. This is not a hard real-time guarantee.
+- Live pitch, bank, and rudder are filtered before the existing attitude mapping and
+  Stewart geometry. The first valid sample after startup, reconnect, or source reset
+  initializes immediately. The default 120 ms time constant is update-interval aware;
+  raw HMI telemetry remains unfiltered, and manual inputs retain exact behavior.
 - Output requires a connected client, valid position feedback for that connection,
   and an available payload. Disconnect resets the feedback gate.
 - Pitch is negated and converted from radians; bank is converted from radians;
@@ -225,7 +231,7 @@ test relies on assertions, which Release builds may disable:
 
 ```powershell
 cmake -S . -B build -DBUILD_TESTING=ON -DCMAKE_BUILD_TYPE=Debug
-cmake --build build --config Debug --target calculate_legs_tests dashboard_model_tests motion_calculator_tests
+cmake --build build --config Debug --target calculate_legs_tests dashboard_model_tests motion_calculator_tests simulator_input_filter_tests
 ctest --test-dir build -C Debug --output-on-failure -E "controller_protocol_tests|motion_controller_tests"
 ```
 
@@ -239,7 +245,7 @@ ctest --test-dir build -C Debug --output-on-failure -E "controller_protocol_test
 - When nlohmann/json is found, build controller_protocol_tests and motion_controller_tests before CTest. It
   checks both PLC formats, Unity, malformed feedback, fragmentation, combined
   messages, legacy framing, and stream reset; it does not require Windows or MSFS.
-  Then run CTest without the -E exclusion to execute all five suites. Motion-controller tests cover manual execution without MSFS,
+  Then run CTest without the -E exclusion to execute all six suites. Motion-controller tests cover live filtering, manual execution without MSFS,
   angle/actuator input mapping and validation, feedback gating, source isolation, cadence, rounding, and repeated motion steps.
 - For relevant runtime changes, validate startup without MSFS/client, reconnects,
   orderly shutdown, feedback gating, fragmented/combined messages, and nominal

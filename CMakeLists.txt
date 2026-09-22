@@ -10,6 +10,8 @@ add_executable(FlightSim
     MotionCalculator.h
     MotionController.h
     MotionController.cpp
+    SimulatorInputFilter.h
+    SimulatorInputFilter.cpp
     ControllerProtocol.h
     MotionCalculator.cpp
     ControllerProtocol.cpp
@@ -72,9 +74,19 @@ if(BUILD_TESTING)
     target_include_directories(motion_calculator_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
     add_test(NAME motion_calculator_tests COMMAND motion_calculator_tests)
 
+    add_executable(simulator_input_filter_tests
+        SimulatorInputFilter.cpp
+        SimulatorInputFilter.h
+        tests/simulator_input_filter_tests.cpp
+    )
+    target_compile_features(simulator_input_filter_tests PRIVATE cxx_std_14)
+    target_include_directories(simulator_input_filter_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+    add_test(NAME simulator_input_filter_tests COMMAND simulator_input_filter_tests)
+
     if(NLOHMANN_JSON_INCLUDE_DIR)
         add_executable(motion_controller_tests
             MotionController.cpp
+            SimulatorInputFilter.cpp
             MotionCalculator.cpp
             calculate_legs.cpp
             DashboardModel.cpp

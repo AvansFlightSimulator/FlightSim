@@ -21,6 +21,9 @@
     <ClCompile Include="MotionController.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="SimulatorInputFilter.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="ControllerProtocol.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -54,6 +57,9 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="MotionController.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="SimulatorInputFilter.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="ControllerProtocol.h">

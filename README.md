@@ -47,16 +47,16 @@ retained, but output requires valid feedback from the replacement connection.
 
 1. `main.cpp` opens the HMI and starts the TCP server for the target selected in `BuildMode.h`. The HMI remains responsive while it waits for external systems.
 2. `SimConnectHandler` connects to MSFS and subscribes to pitch, bank, and rudder updates.
-3. `MotionController` accepts live samples or applied manual inputs, preserving the extra rudder division by 1.5. At most 20 times per second for the selected source, `MotionCalculator` converts simulator units, applies the existing sign changes, halves each angle, and clamps it to +/-30 degrees. It calculates one rotation matrix shared by all six actuators.
+3. `MotionController` validates and smooths live pitch, bank, and rudder samples before the existing angle mapping. The time-based exponential filter uses the elapsed sample interval and initializes directly from the first valid sample. Manual inputs remain unfiltered. At most 20 times per second for the selected source, `MotionCalculator` applies the existing rudder division, sign changes, halving, and +/-30-degree clamps, then calculates one rotation matrix shared by all six actuators.
 4. With valid controller feedback available, each actuator target is limited to the configured maximum step and speed. `ControllerProtocol` encodes the command as PLC or Unity JSON, which `MotionController` publishes as the latest payload.
 5. The output worker sends the latest payload at 20 Hz while the feedback worker receives `currentPositions` messages.
 6. If the client disconnects, the feedback worker keeps the listening socket open and waits for a replacement client.
 
 ```text
-MSFS -> SimConnectHandler --+
-HMI manual input ----------+-> MotionController -> MotionCalculator -> latest JSON
-                                                                         |
-PLC / Unity <- TCPServer <- main.cpp output worker (20 Hz) <---------------+
+MSFS -> SimConnectHandler -> MotionController [live filter] -+
+HMI manual input ----------> MotionController ---------------+-> MotionCalculator -> latest JSON
+                                                                                         |
+PLC / Unity <- TCPServer <- main.cpp output worker (20 Hz) <-------------------------------+
 PLC / Unity -> TCPServer -> ControllerProtocol -> position feedback
                                                      |
                                               MotionCalculator
@@ -69,7 +69,8 @@ PLC / Unity -> TCPServer -> ControllerProtocol -> position feedback
 - `DashboardModel.h/.cpp`: synchronized HMI telemetry, connection states, actuator values, message counts, and recent system events.
 - `HmiWindow.h/.cpp`: dependency-free Win32/GDI dashboard for the six-actuator platform, system statuses, aircraft attitude, and activity feed.
 - `SimConnectHandler.h/.cpp`: owns the SimConnect session, registers telemetry, dispatches callbacks, and forwards orientation samples on the control schedule.
-- `MotionController.h/.cpp`: selects the source, applies manual input on Execute, schedules manual calculations, shares live/manual angle mapping and command generation, accepts PLC actuator targets, and owns the synchronized payload cache. No SDK or socket dependencies.
+- `MotionController.h/.cpp`: selects the source, filters live simulator input, applies manual input on Execute, schedules manual calculations, shares live/manual angle mapping and command generation, accepts PLC actuator targets, and owns the synchronized payload cache. No SDK or socket dependencies.
+- `SimulatorInputFilter.h/.cpp`: time-based first-order low-pass filter for live simulator pitch, bank, and rudder, with reconnect/reset initialization and nonfinite-input rejection.
 - `BridgeTypes.h`: shared six-actuator array, platform attitude, and command types without Windows dependencies.
 - `MotionCalculator.h/.cpp`: simulator-to-platform angle mapping, platform mounting coordinates, calibration constants, shared actuator step/speed limits for geometric and direct targets, and the control interval. No SDK or networking dependencies.
 - `ControllerProtocol.h/.cpp`: PLC/Unity JSON encoding, six-value feedback validation, and buffered extraction of complete messages from TCP chunks. No socket or SDK dependencies.
@@ -79,8 +80,9 @@ PLC / Unity -> TCPServer -> ControllerProtocol -> position feedback
 - `tests/calculate_legs_tests.cpp`: platform-independent neutral and boundary-pose checks for all six actuators.
 - `tests/dashboard_model_tests.cpp`: platform-independent telemetry state and disconnect-reset checks.
 - `tests/motion_calculator_tests.cpp`: existing angle mapping, calibrated targets, actuator order, feedback-relative step limits, and speed regression checks.
+- `tests/simulator_input_filter_tests.cpp`: filter initialization, constant/noisy/ramp/step inputs, reset, invalid values, and update-interval independence.
 - `tests/controller_protocol_tests.cpp`: both output formats, feedback rejection, fragmented/combined messages, legacy framing, and stream reset checks; requires nlohmann/json.
-- `tests/motion_controller_tests.cpp`: manual angle and PLC actuator execution without MSFS, source isolation, validation, feedback gating, cadence, rounding, and successive movement calculations; requires nlohmann/json.
+- `tests/motion_controller_tests.cpp`: live-filter pipeline integration, manual angle and PLC actuator execution without MSFS, source isolation, validation, feedback gating, cadence, rounding, and successive movement calculations; requires nlohmann/json.
 - `StuartServer.sln`: Visual Studio solution containing the server project.
 - `StuartClient.vcxproj`: primary Visual C++ build definition. Despite its filename, its project name is `StuartServer` and it builds the server sources.
 - `StuartClient.vcxproj.filters`: Visual Studio Solution Explorer grouping for the server source and header files.
@@ -94,7 +96,7 @@ PLC / Unity -> TCPServer -> ControllerProtocol -> position feedback
 Start with `main.cpp` to see the application's lifetime, then follow one sample:
 
 1. **Receive simulator data:** `SimConnectHandler::HandleDispatch` receives two SDK message types. Pitch and bank are radians; rudder is degrees. The structs at the top of the file must match the subscription field order.
-2. **Map the attitude:** `HandleOrientation` passes those values to `MotionController::UpdateSimulatorInput`. Its shared mapping divides rudder by 1.5 before calling `CalculatePlatformAttitude`. Manual Execute converts pitch/roll degrees to radians and uses the same mapping. Raw HMI values keep simulator signs. Platform pitch and rudder are negated, all three angles are halved, and each is limited to +/-30 degrees. Rudder produces platform yaw; aircraft heading is not subscribed.
+2. **Filter and map the attitude:** after all three finite live signals are available, `HandleOrientation` passes them and the sample time to `MotionController::UpdateSimulatorInput`. The HMI retains the raw values, while `SimulatorInputFilter` smooths the command path with `alpha = 1 - exp(-dt / tau)` and `filtered += alpha * (raw - filtered)`. The default time constant is 120 ms. The shared mapping then divides rudder by 1.5 before calling `CalculatePlatformAttitude`. Manual Execute uses the same mapping without filtering. Platform pitch and rudder are negated, all three angles are halved, and each is limited to +/-30 degrees. Rudder produces platform yaw; aircraft heading is not subscribed.
 3. **Calculate the legs:** `CalculateMotion` takes the platform attitude and a copy of the latest feedback. The geometry applies translation plus a rotated platform mounting point minus a base mounting point. The vector's length becomes a target in the existing controller reference system. Geometry uses yaw about Z, negative platform roll about Y, and platform pitch about X; preserve this established mapping.
 4. **Limit the move:** each target is at most 20 position units away from its feedback position per calculation. Speed is the limited distance divided by 0.05 seconds, bounded to 2..500. A level pose currently rounds to 201 on all six actuators, although the reference constant is 200. These are existing calibration results, not new physical-unit claims.
 5. **Publish and send:** `BuildCommandPayload` selects the configured JSON format. `MotionController` replaces its cached payload under a mutex. The output worker copies it, and `TCPServer::sendData` adds a newline and handles partial socket sends.
@@ -130,14 +132,14 @@ The HMI opens as soon as the executable starts; a PLC connection is not required
 
 - Microsoft Flight Simulator/SimConnect and PLC/Unity connection state.
 - Live receive/transmit counters and feedback freshness.
-- Three split cards below the orbit view compare simulator and platform angles in degrees: `MSFS` on the left shows raw simulator values; `TARGET` on the right shows the processed platform attitude after motion sign changes, halving, and clamping. Cards are labeled `PITCH`, `ROLL`, and `RUDDER / YAW`: the third compares simulator rudder deflection with the derived platform yaw, not aircraft heading. Targets are calculated angles, not measured platform orientation.
+- Three split cards below the orbit view compare simulator and platform angles in degrees: `MSFS` on the left shows raw simulator values; `TARGET` on the right shows the filtered platform attitude after motion sign changes, halving, and clamping. Cards are labeled `PITCH`, `ROLL`, and `RUDDER / YAW`: the third compares simulator rudder deflection with the derived platform yaw, not aircraft heading. Targets are calculated angles, not measured platform orientation.
 - A six-leg Stewart-platform orbit visualization driven by pitch, roll, yaw, and actuator feedback, with individual base mounting points and no filled base plate.
 - Current position, commanded target, and commanded speed for all six actuators.
 - Recent startup, connection, feedback rejection, error, and shutdown messages that also provide the operational context previously available only in the console. Attitude scaling and clamping do not emit warnings; their results remain visible in the raw/target cards.
 
 The window title is "Flight Simulator Motion HMI". The input-source selector and manual fields sit below the status cards. These native controls match the dark dashboard with padded, rounded fields, visible focus/hover states, a dark dropdown, and a cyan Execute button when enabled. Disabled controls use muted colors; keyboard selection, tab navigation, and text editing retain native Windows behavior. In the platform view, drag with the left mouse button to orbit, use the mouse wheel to zoom, and double-click to reset the camera. These controls affect only the view; the drawing is illustrative, not a physical geometry measurement.
 
-In live MSFS mode, both sides of the cards update without a PLC/Unity client or position feedback. Pitch, roll, and platform targets update on the existing nominal 20 Hz calculation schedule; raw rudder updates when its separate SimConnect message arrives. Cards show placeholders until their required samples arrive and after SimConnect disconnects, including while waiting for new samples on reconnect. The orbit view continues to use the existing processed platform attitude shown in the target column. No barrel-roll return curve has been implemented.
+In live MSFS mode, both sides of the cards update without a PLC/Unity client or position feedback. Pitch, roll, and filtered platform targets update on the existing nominal 20 Hz calculation schedule; raw rudder updates when its separate SimConnect message arrives. Cards show placeholders until their required samples arrive and after SimConnect disconnects, including while waiting for new samples on reconnect. The orbit view continues to use the filtered, processed platform attitude shown in the target column. No barrel-roll return curve has been implemented.
 
 Closing the HMI performs the same orderly worker, socket, and SimConnect shutdown as closing the application. If MSFS is not running at startup, the bridge keeps the HMI available and retries SimConnect every five seconds while MSFS input is selected. Manual input suspends those retries.
 
@@ -146,6 +148,7 @@ Closing the HMI performs the same orderly worker, socket, and SimConnect shutdow
 - The six actuator values and JSON keys are protocol contracts. Coordinate changes with the PLC and Unity consumers.
 - Output remains disabled until the connected client supplies its first valid six-value position message. A reconnected client must supply fresh feedback before commands resume.
 - Motion constants such as attitude limits, maximum step, minimum speed, and maximum speed are grouped at the top of `MotionCalculator.cpp` for review and tuning.
+- Live-input filter strength is controlled by `SimulatorFilterSettings::TimeConstant` in `SimulatorInputFilter.h`. A larger value suppresses more noise and adds more lag; a smaller value follows MSFS more quickly.
 - The geometry implementation in `calculate_legs.cpp` is independent of Windows, sockets, and SimConnect. The HMI drawing is illustrative and does not measure platform orientation.
 - The feedback gate has no age timeout. Cached commands are retained across simulator loss or client reconnect, but cleared when changing input sources. Unit tests do not establish safe physical operation.
 - Protocol logs are appended to `logs/FlightSim_StewartServer_Log.txt`; the directory is created automatically.
@@ -156,11 +159,11 @@ Use Visual Studio 2022 and build `StuartServer.sln` for x64 on Windows. A comple
 
 The auxiliary CMake definition contains the same active source list as the Visual Studio project, but it is not a portable build: the application still uses Windows and SimConnect APIs. A CMake configure on macOS or Linux is therefore not proof that the application builds.
 
-The geometry, motion, and dashboard-model checks do not require SimConnect and can run on any platform with CMake and a C++14 compiler:
+The geometry, motion, live-input-filter, and dashboard-model checks do not require SimConnect and can run on any platform with CMake and a C++14 compiler:
 
 ```shell
 cmake -S . -B build -DBUILD_TESTING=ON -DCMAKE_BUILD_TYPE=Debug
-cmake --build build --config Debug --target calculate_legs_tests dashboard_model_tests motion_calculator_tests
+cmake --build build --config Debug --target calculate_legs_tests dashboard_model_tests motion_calculator_tests simulator_input_filter_tests
 ctest --test-dir build -C Debug --output-on-failure -E "controller_protocol_tests|motion_controller_tests"
 ```
 

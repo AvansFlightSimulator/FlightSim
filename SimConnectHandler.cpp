@@ -5,6 +5,7 @@
 #include "MotionCalculator.h"
 #include "TCPServer.h"
 
+#include <cmath>
 #include <iostream>
 
 namespace {
@@ -58,14 +59,17 @@ void SimConnectHandler::HandleDispatch(SIMCONNECT_RECV* data) {
             if (now >= nextCalculation_) {
                 nextCalculation_ = now + MotionSettings::ControlInterval;
                 const auto* orientation = reinterpret_cast<const AircraftOrientation*>(&objectData->dwData);
-                HandleOrientation(orientation->pitch, orientation->bank);
+                HandleOrientation(orientation->pitch, orientation->bank, now);
             }
         }
         else if (objectData->dwRequestID == REQUEST_RUDDER) {
             const auto* rudder = reinterpret_cast<const RudderData*>(&objectData->dwData);
-            rudderDeflectionDegrees_ = rudder->deflection;
-            if (dashboard_) {
-                dashboard_->UpdateSimulatorRudder(rudder->deflection);
+            if (std::isfinite(rudder->deflection)) {
+                rudderDeflectionDegrees_ = rudder->deflection;
+                rudderSampleAvailable_ = true;
+                if (dashboard_) {
+                    dashboard_->UpdateSimulatorRudder(rudder->deflection);
+                }
             }
         }
         break;
@@ -85,9 +89,13 @@ void SimConnectHandler::HandleDispatch(SIMCONNECT_RECV* data) {
     }
 }
 
-void SimConnectHandler::HandleOrientation(double pitchRadians, double bankRadians) {
+void SimConnectHandler::HandleOrientation(double pitchRadians, double bankRadians,
+    std::chrono::steady_clock::time_point timestamp) {
+    if (!rudderSampleAvailable_) {
+        return;
+    }
     motion_.UpdateSimulatorInput(pitchRadians, bankRadians, rudderDeflectionDegrees_,
-        server_.hasPositionFeedback(), server_.getCurrentPositions());
+        server_.hasPositionFeedback(), server_.getCurrentPositions(), timestamp);
 }
 
 bool SimConnectHandler::QuitRequested() const noexcept {
@@ -165,4 +173,8 @@ void SimConnectHandler::CloseSimConnect() {
     if (dashboard_) {
         dashboard_->SetSimulatorConnected(false);
     }
+    rudderDeflectionDegrees_ = 0.0;
+    rudderSampleAvailable_ = false;
+    // A replacement session must initialize from its first sample, not stale data.
+    motion_.ResetSimulatorInputFilter();
 }

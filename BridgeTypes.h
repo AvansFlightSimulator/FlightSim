@@ -14,7 +14,8 @@ enum class InputMode {
     ActuatorPositions
 };
 
-// Manual input uses the raw MSFS signs and degrees, including rudder (not heading).
+// Simulator-style input uses raw MSFS signs and degrees, including rudder (not heading).
+// Live samples are filtered in this form; manual input uses the same form directly.
 struct SimulatorInput {
     double pitchDegrees = 0.0;
     double rollDegrees = 0.0;

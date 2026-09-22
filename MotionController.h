@@ -1,6 +1,7 @@
 #pragma once
 
 #include "BridgeTypes.h"
+#include "SimulatorInputFilter.h"
 
 #include <chrono>
 #include <mutex>
@@ -22,7 +23,9 @@ public:
     void TickManual(bool hasFeedback, const ActuatorValues& currentPositions,
         std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now());
     void UpdateSimulatorInput(double pitchRadians, double bankRadians, double rudderDegrees,
-        bool hasFeedback, const ActuatorValues& currentPositions);
+        bool hasFeedback, const ActuatorValues& currentPositions,
+        std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now());
+    void ResetSimulatorInputFilter() noexcept;
     bool TryGetLatestPayload(std::string& payload) const;
 
 private:
@@ -36,6 +39,7 @@ private:
     PlatformAttitude manualAttitude_;
     ActuatorValues actuatorPositions_{};
     std::chrono::steady_clock::time_point nextManualCalculation_{};
+    SimulatorInputFilter simulatorInputFilter_;
     mutable std::mutex payloadMutex_;
     std::string latestPayload_;
 };

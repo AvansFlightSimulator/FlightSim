@@ -30,13 +30,15 @@ public:
 private:
     static void CALLBACK DispatchCallback(SIMCONNECT_RECV* data, DWORD dataSize, void* context);
     void HandleDispatch(SIMCONNECT_RECV* data);
-    void HandleOrientation(double pitchRadians, double bankRadians);
+    void HandleOrientation(double pitchRadians, double bankRadians,
+        std::chrono::steady_clock::time_point timestamp);
 
     HANDLE connection_ = nullptr;
     TCPServer& server_;
     MotionController& motion_;
     DashboardModel* dashboard_ = nullptr;
     double rudderDeflectionDegrees_ = 0.0;
+    bool rudderSampleAvailable_ = false;
     std::chrono::steady_clock::time_point nextCalculation_;
     bool quitRequested_ = false;
     bool connectionFailureReported_ = false;

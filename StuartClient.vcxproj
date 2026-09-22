@@ -137,6 +137,7 @@
   <ItemGroup>
     <ClCompile Include="MotionCalculator.cpp" />
     <ClCompile Include="MotionController.cpp" />
+    <ClCompile Include="SimulatorInputFilter.cpp" />
     <ClCompile Include="ControllerProtocol.cpp" />
     <ClCompile Include="calculate_legs.cpp" />
     <ClCompile Include="DashboardModel.cpp" />
@@ -150,6 +151,7 @@
     <ClInclude Include="BridgeTypes.h" />
     <ClInclude Include="MotionCalculator.h" />
     <ClInclude Include="MotionController.h" />
+    <ClInclude Include="SimulatorInputFilter.h" />
     <ClInclude Include="ControllerProtocol.h" />
     <ClInclude Include="BuildMode.h" />
     <ClInclude Include="calculate_legs.h" />
