@@ -81,6 +81,28 @@ pitch 20, roll -40, rudder 12 requests targets -10, -20, -4 degrees. This does n
 implement the still-unspecified future rudder scaling or inverted-return curve.
 Manual mode still requires the SimConnect SDK/runtime to build/load the application.
 
+## Direct actuator input milestone
+
+The owner requested a third mode that independently sets absolute actuator
+positions, e.g. A1 = 200 and A2 = 300, and confirmed **PLC only for now**. PLC builds
+now offer Actuator positions alongside live MSFS and manual angles. Its six initially
+empty fields are drafts until Execute applies all six together. Existing actuator
+order, connection/feedback gate, 50 ms calculation cadence, and step/speed limits
+are retained. Shared CalculateActuatorMotion applies the existing limits after
+geometry for angle modes, or directly to requested positions in the third mode.
+No geometry or orientation is inferred from independent position requests.
+
+Direct input accepts finite values within the existing PLC representation 0..999
+and rounds them to whole positions. This is input/protocol validation, not an
+owner-confirmed physical travel range or a check that arbitrary positions are
+mechanically reachable. Invalid entries leave the prior applied request unchanged.
+The HMI shows six applied final positions instead of the orbit drawing, with
+orientation unavailable; actuator cards show the feedback-relative intermediate
+commands separately and use controller-unit labels. Changing any input mode clears
+the active payload and applied-input availability. Reentering either manual mode
+requires Execute. Applied targets survive controller reconnect, subject to new
+valid feedback. Unity retains its two modes and unchanged protocol.
+
 ## Working with the owner
 
 - Read this guide and `README.md` before making changes; inspect the relevant
@@ -96,7 +118,8 @@ Manual mode still requires the SimConnect SDK/runtime to build/load the applicat
 
 ```text
 MSFS -> SimConnect -------+
-HMI manual input --------+-> MotionController -> Stewart geometry -> latest payload
+HMI manual angles ------+-> MotionController -> Stewart geometry -> step limits -> payload
+HMI A1-A6 positions -------> MotionController ---------------------> step limits -> payload
                                                                   |
 PLC / Unity <- newline-delimited JSON <- TCP output worker (20 Hz) -+
 PLC / Unity -> position feedback -> TCP receive worker -> motion calculation
@@ -109,12 +132,12 @@ All components -> synchronized DashboardModel -> Win32/GDI HMI
   number formatting. Exactly one of `TARGET_PLC` and `TARGET_UNITY` must be set.
 - `SimConnectHandler.h/.cpp`: owns the SimConnect handle, subscriptions, dispatch,
   live sample scheduling, and raw rudder dashboard updates.
-- `MotionController.h/.cpp`: shared live/manual mapping, source selection, manual
-  execution/scheduling, dashboard updates, and synchronized latest-payload cache;
+- `MotionController.h/.cpp`: shared live/manual angle mapping, three-source selection, manual
+  angle/actuator execution and scheduling, dashboard updates, and synchronized latest-payload cache;
   independent of SimConnect and Winsock.
 - `BridgeTypes.h`: common actuator count/array, platform attitude, and command types.
 - `MotionCalculator.h/.cpp`: pure attitude mapping and motion calculations, physical
-  mounting coordinates, calibration/limits, and shared 50 ms control interval.
+  mounting coordinates, calibration, shared geometric/direct actuator limits, and 50 ms control interval.
 - `ControllerProtocol.h/.cpp`: PLC/Unity serialization, feedback validation, and
   incremental message framing; independent of Winsock and SimConnect.
 - `calculate_legs.h/.cpp`: vector operations and Euler rotation geometry. Keep
@@ -217,7 +240,7 @@ ctest --test-dir build -C Debug --output-on-failure -E "controller_protocol_test
   checks both PLC formats, Unity, malformed feedback, fragmentation, combined
   messages, legacy framing, and stream reset; it does not require Windows or MSFS.
   Then run CTest without the -E exclusion to execute all five suites. Motion-controller tests cover manual execution without MSFS,
-  input mapping/validation, feedback gating, source isolation, cadence, and repeated motion steps.
+  angle/actuator input mapping and validation, feedback gating, source isolation, cadence, rounding, and repeated motion steps.
 - For relevant runtime changes, validate startup without MSFS/client, reconnects,
   orderly shutdown, feedback gating, fragmented/combined messages, and nominal
   20 Hz output. Exercise both target modes when changing shared protocol code.
@@ -240,6 +263,15 @@ output samples measured about 19.8 Hz in both modes. A separate loopback Unity r
 passed live MSFS -> manual -> live MSFS switching; the UI was visually checked at
 minimum size. Physical hardware and actual MSFS process shutdown/restart were not
 validated in that run.
+
+Actuator-position validation in September 2026: Debug/Release x64 builds and all
+five test suites passed. The motion-controller suite also passed in an isolated
+Unity build, including rejection of unsupported position mode. Loopback PLC tests
+reached six distinct target positions and passed input rejection, draft isolation,
+step limits, source changes, reconnect feedback gating, minimum-size UI inspection,
+and orderly shutdown, at about 20.0 Hz. Existing manual-angle loopback checks passed
+for both PLC and Unity; Unity still offered only two modes. These runtime checks
+simulated unavailable SimConnect and did not operate physical hardware.
 
 ## Change conventions
 

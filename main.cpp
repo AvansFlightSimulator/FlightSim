@@ -129,7 +129,7 @@ int main() {
 
     while (!simulator.QuitRequested() && ProcessWindowsMessages(hmi)) {
         const auto now = std::chrono::steady_clock::now();
-        if (motion.IsManualMode()) {
+        if (motion.GetInputMode() != InputMode::Simulator) {
             if (simulator.IsConnected()) {
                 simulator.CloseSimConnect();
             }

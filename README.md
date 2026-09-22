@@ -14,6 +14,35 @@ Selecting **MSFS (live)** resumes simulator connection attempts and live input. 
 
 Manual mode removes the need for a running simulator connection. The application still builds against and loads the SimConnect SDK/runtime; this is not an SDK-free build.
 
+## Actuator positions (PLC only)
+
+Select **Actuator positions**, the third input mode in a PLC build, to enter six
+absolute controller positions: **A1** through **A6** follow the existing actuator
+order. For example, A1 = 200 and A2 = 300 request those positions independently.
+This mode does not require MSFS and bypasses the angle-to-leg geometry.
+
+Enter all six fields, then press **Execute**. Fields initially start empty; selecting
+the mode or editing fields never sends a new request. Execute requires the connected
+PLC's valid six-position feedback. Inputs must be finite values within the PLC's
+0..999 representation and are rounded to whole positions before being applied.
+These are controller values; the accepted range does not establish physical travel
+limits or the mechanical reachability of arbitrary six-position combinations.
+
+The left panel shows the six **applied final positions**. The right actuator cards
+show feedback, the current limited command, and its speed. The existing 20-unit
+maximum step per nominal 50 ms calculation and speed limits are shared with angle
+control. Each calculation uses controller feedback, so successive feedback samples
+allow the commands to progress toward all six requested positions. Invalid entries
+reject the entire new request and leave the previous applied request active.
+
+No platform orientation is calculated from independent actuator positions. This
+mode replaces the orbit drawing with the applied-position panel and shows angle
+placeholders. Unity retains its two existing modes and its unchanged orientation
+protocol; actuator-position control is PLC-only for now, as requested by the owner.
+Switching modes clears the command and requires a new Execute in either manual
+mode. Disconnect/reconnect behavior matches manual angles: the applied target is
+retained, but output requires valid feedback from the replacement connection.
+
 ## Runtime flow
 
 1. `main.cpp` opens the HMI and starts the TCP server for the target selected in `BuildMode.h`. The HMI remains responsive while it waits for external systems.
@@ -36,13 +65,13 @@ PLC / Unity -> TCPServer -> ControllerProtocol -> position feedback
 ## File map
 
 - `BuildMode.h`: selects exactly one output target and defines its TCP bind address, port, and PLC number format. The current selection is PLC mode.
-- `main.cpp`: application entry point, HMI/TCP startup, SimConnect dispatch/retry or manual calculation ticks, Windows message handling, and worker-thread lifetime.
+- `main.cpp`: application entry point, HMI/TCP startup, SimConnect dispatch/retry or manual angle/actuator calculation ticks, Windows message handling, and worker-thread lifetime.
 - `DashboardModel.h/.cpp`: synchronized HMI telemetry, connection states, actuator values, message counts, and recent system events.
 - `HmiWindow.h/.cpp`: dependency-free Win32/GDI dashboard for the six-actuator platform, system statuses, aircraft attitude, and activity feed.
 - `SimConnectHandler.h/.cpp`: owns the SimConnect session, registers telemetry, dispatches callbacks, and forwards orientation samples on the control schedule.
-- `MotionController.h/.cpp`: selects the source, applies manual input on Execute, schedules manual calculations, shares live/manual mapping and command generation, and owns the synchronized payload cache. No SDK or socket dependencies.
+- `MotionController.h/.cpp`: selects the source, applies manual input on Execute, schedules manual calculations, shares live/manual angle mapping and command generation, accepts PLC actuator targets, and owns the synchronized payload cache. No SDK or socket dependencies.
 - `BridgeTypes.h`: shared six-actuator array, platform attitude, and command types without Windows dependencies.
-- `MotionCalculator.h/.cpp`: simulator-to-platform angle mapping, platform mounting coordinates, calibration constants, actuator step/speed limits, and shared control interval. No SDK or networking dependencies.
+- `MotionCalculator.h/.cpp`: simulator-to-platform angle mapping, platform mounting coordinates, calibration constants, shared actuator step/speed limits for geometric and direct targets, and the control interval. No SDK or networking dependencies.
 - `ControllerProtocol.h/.cpp`: PLC/Unity JSON encoding, six-value feedback validation, and buffered extraction of complete messages from TCP chunks. No socket or SDK dependencies.
 - `calculate_legs.h/.cpp`: vector operations, Euler-angle rotation matrix, and Stewart-platform actuator-length calculations.
 - `TCPServer.h/.cpp`: Winsock server setup, reconnection handling, complete sends, handoff to the protocol parser, keep-alive configuration, synchronized position state, and connection cleanup.
@@ -51,7 +80,7 @@ PLC / Unity -> TCPServer -> ControllerProtocol -> position feedback
 - `tests/dashboard_model_tests.cpp`: platform-independent telemetry state and disconnect-reset checks.
 - `tests/motion_calculator_tests.cpp`: existing angle mapping, calibrated targets, actuator order, feedback-relative step limits, and speed regression checks.
 - `tests/controller_protocol_tests.cpp`: both output formats, feedback rejection, fragmented/combined messages, legacy framing, and stream reset checks; requires nlohmann/json.
-- `tests/motion_controller_tests.cpp`: manual execution without MSFS, source isolation, validation, feedback gating, cadence, and successive movement calculations; requires nlohmann/json.
+- `tests/motion_controller_tests.cpp`: manual angle and PLC actuator execution without MSFS, source isolation, validation, feedback gating, cadence, rounding, and successive movement calculations; requires nlohmann/json.
 - `StuartServer.sln`: Visual Studio solution containing the server project.
 - `StuartClient.vcxproj`: primary Visual C++ build definition. Despite its filename, its project name is `StuartServer` and it builds the server sources.
 - `StuartClient.vcxproj.filters`: Visual Studio Solution Explorer grouping for the server source and header files.
@@ -150,6 +179,16 @@ The September 2026 cleanup was checked with Debug/Release x64 builds, all four t
 
 Manual-input validation in September 2026: Debug/Release x64 builds and all five test suites passed. Temporary PLC and Unity builds bound only to loopback, with SimConnect_Open deliberately bypassed to simulate an unavailable simulator, passed native UI startup, feedback gating, invalid-input rejection, Execute, draft isolation, input mapping, step limits, fragmented/combined feedback, reconnect gating, source switching, resize, and HMI-close shutdown checks. Short streams measured about 19.8 Hz in both modes. A separate loopback Unity run passed live MSFS -> manual -> live MSFS switching, and the UI was visually checked at minimum window size. This did not operate physical hardware or test actual MSFS process shutdown/restart.
 
+Actuator-position validation in September 2026: Debug/Release x64 builds and all
+five suites passed. The motion-controller suite also passed in an isolated Unity
+build, including rejection of unsupported direct-position mode. A loopback PLC
+run reached six different requested positions with the retained step/speed limits
+and passed blank/malformed/nonfinite/range rejection, draft isolation, all three
+mode transitions, reconnect gating, minimum-size UI inspection, and shutdown;
+output measured about 20.0 Hz. Existing manual-angle loopback checks passed for
+both PLC and Unity, whose HMI retained exactly two modes. SimConnect was deliberately
+unavailable in these runtime checks; no physical hardware was operated.
+
 ## Manual validation checklist
 
 - Build Debug x64 and Release x64 on Windows.
@@ -157,6 +196,7 @@ Manual-input validation in September 2026: Debug/Release x64 builds and all five
 - Start and stop MSFS/SimConnect cleanly. Switch from live MSFS to manual and back.
 - With MSFS stopped, select manual, enter pitch/roll/rudder degrees, and Execute using a simulated controller first. Verify draft edits and rejected inputs leave the applied target unchanged; select level and Execute to return toward level.
 - With MSFS 2020 connected and no PLC/Unity client, verify raw pitch, roll, and rudder cards update. Roll through inverted and confirm values beyond +/-30 degrees remain visible. Check placeholders on simulator disconnect and until fresh samples arrive after reconnect.
+- In PLC actuator-position mode, verify A1-A6 ordering, applied positions versus intermediate commands, invalid-input rejection, and a new Execute requirement after switching modes.
 - Connect, disconnect, and reconnect the selected PLC or Unity client.
 - Measure the nominal 20 Hz newline-delimited command stream; Windows scheduling is not a hard real-time guarantee.
 - Send fragmented and combined feedback messages and verify all six positions.

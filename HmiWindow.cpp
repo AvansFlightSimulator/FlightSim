@@ -2,6 +2,7 @@
 
 #include "DashboardModel.h"
 #include "MotionController.h"
+#include "MotionCalculator.h"
 #include "calculate_legs.h"
 
 #include <windowsx.h>
@@ -26,6 +27,7 @@ constexpr double Pi = 3.14159265358979323846;
 constexpr int SourceControlId = 100;
 constexpr int FirstAngleControlId = 101;
 constexpr int ExecuteControlId = 104;
+constexpr int FirstPositionControlId = 110;
 
 const COLORREF Background = RGB(13, 20, 29);
 const COLORREF Panel = RGB(21, 31, 43);
@@ -52,6 +54,19 @@ RECT MakeRect(int left, int top, int right, int bottom) {
 RECT AngleFieldBounds(int index) {
     const int left = 224 + index * 110;
     return MakeRect(left, ControlTop, left + 94, ControlTop + ControlHeight);
+}
+
+RECT PositionFieldBounds(int index) {
+    const int left = 224 + index * 80;
+    return MakeRect(left, ControlTop, left + 70, ControlTop + ControlHeight);
+}
+
+const char* InputModeName(int index) {
+    switch (index) {
+    case 1: return "Manual input";
+    case 2: return "Actuator positions";
+    default: return "MSFS (live)";
+    }
 }
 
 bool MouseOver(HWND window) {
@@ -162,13 +177,15 @@ void DrawActuatorCard(
     float target,
     float speed,
     bool hasFeedback,
-    bool hasTarget) {
+    bool hasTarget,
+    bool controllerUnits) {
     FillRoundedRectangle(dc, rect, Panel, Border);
 
     const COLORREF actuatorColor = hasFeedback ? Cyan : SecondaryText;
     DrawTextValue(dc, headingFont, "A" + std::to_string(actuator),
         MakeRect(rect.left + 14, rect.top + 8, rect.left + 56, rect.top + 36), actuatorColor);
-    DrawTextValue(dc, headingFont, hasFeedback ? FormatNumber(current, 1) + " mm" : "--.- mm",
+    const std::string units = controllerUnits ? " units" : " mm";
+    DrawTextValue(dc, headingFont, (hasFeedback ? FormatNumber(current, 1) : "--.-") + units,
         MakeRect(rect.left + 58, rect.top + 8, rect.right - 12, rect.top + 36), PrimaryText,
         DT_RIGHT | DT_SINGLELINE | DT_VCENTER);
 
@@ -198,9 +215,9 @@ void DrawActuatorCard(
         }
     }
 
-    DrawTextValue(dc, smallFont, "TARGET  " + (hasFeedback && hasTarget ? FormatNumber(target, 1) : "--.-") + " mm",
+    DrawTextValue(dc, smallFont, "TARGET  " + (hasFeedback && hasTarget ? FormatNumber(target, 1) : "--.-") + units,
         MakeRect(rect.left + 14, rect.top + 59, rect.right - 12, rect.top + 80), SecondaryText);
-    DrawTextValue(dc, bodyFont, "SPEED  " + (hasFeedback && hasTarget ? FormatNumber(speed, 0) : "---") + " mm/s",
+    DrawTextValue(dc, bodyFont, "SPEED  " + (hasFeedback && hasTarget ? FormatNumber(speed, 0) : "---") + units + "/s",
         MakeRect(rect.left + 14, rect.top + 80, rect.right - 12, rect.bottom - 5), PrimaryText);
 }
 
@@ -305,6 +322,9 @@ bool HmiWindow::CreateControls(HINSTANCE instance) {
         reinterpret_cast<LONG_PTR>(SourceControlProcedure)));
     SendMessageW(sourceControl_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"MSFS (live)"));
     SendMessageW(sourceControl_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Manual input"));
+    if (MotionController::SupportsActuatorPositions()) {
+        SendMessageW(sourceControl_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Actuator positions"));
+    }
     SendMessage(sourceControl_, CB_SETCURSEL, 0, 0);
     for (int index = 0; index < 3; ++index) {
         const RECT field = AngleFieldBounds(index);
@@ -317,6 +337,18 @@ bool HmiWindow::CreateControls(HINSTANCE instance) {
         if (!angleControls_[index]) {
             return false;
         }
+    }
+    for (int index = 0; index < 6; ++index) {
+        const RECT field = PositionFieldBounds(index);
+        positionControls_[index] = create(L"EDIT", L"", ES_AUTOHSCROLL,
+            field.left + 10, 50, 20, FirstPositionControlId + index);
+        if (!positionControls_[index]) {
+            return false;
+        }
+        SetWindowPos(positionControls_[index], nullptr, field.left + 10, field.top + 8, 50, 20,
+            SWP_NOZORDER | SWP_NOACTIVATE);
+        SendMessage(positionControls_[index], EM_SETMARGINS, EC_LEFTMARGIN | EC_RIGHTMARGIN, 0);
+        SendMessage(positionControls_[index], EM_SETLIMITTEXT, 63, 0);
     }
     executeControl_ = create(L"BUTTON", L"Execute", BS_OWNERDRAW, 564, 120, ControlHeight, ExecuteControlId);
     RefreshControls();
@@ -349,7 +381,7 @@ void HmiWindow::DrawSourceControl(HDC dc) {
     FillRectangle(dc, bounds, Background);
     FillRoundedRectangle(dc, bounds, PanelRaised, focused ? Cyan : MouseOver(sourceControl_) ? HoverBorder : Border);
     const int selection = static_cast<int>(SendMessage(sourceControl_, CB_GETCURSEL, 0, 0));
-    DrawTextValue(dc, bodyFont_, selection == 1 ? "Manual input" : "MSFS (live)",
+    DrawTextValue(dc, bodyFont_, InputModeName(selection),
         MakeRect(12, 0, bounds.right - 34, bounds.bottom), PrimaryText);
     const int arrowX = bounds.right - 19;
     const int arrowY = bounds.bottom / 2;
@@ -371,7 +403,7 @@ void HmiWindow::DrawControl(const DRAWITEMSTRUCT& item) {
         FillRectangle(item.hDC, item.rcItem, selected ? RGB(29, 68, 78) : PanelRaised);
         RECT text = item.rcItem;
         text.left += 12;
-        DrawTextValue(item.hDC, bodyFont_, item.itemID == 1 ? "Manual input" : "MSFS (live)",
+        DrawTextValue(item.hDC, bodyFont_, InputModeName(static_cast<int>(item.itemID)),
             text, selected ? Cyan : PrimaryText);
         return;
     }
@@ -407,28 +439,71 @@ bool HmiWindow::ProcessControlMessage(MSG& message) {
 
 void HmiWindow::RefreshControls() {
     const auto snapshot = model_.GetSnapshot();
+    const bool manualMode = snapshot.inputMode != InputMode::Simulator;
+    const bool positionMode = snapshot.inputMode == InputMode::ActuatorPositions;
     for (HWND control : angleControls_) {
-        if (control && static_cast<bool>(IsWindowEnabled(control)) != snapshot.manualMode) {
-            EnableWindow(control, snapshot.manualMode);
+        if (control && ((GetWindowLongPtr(control, GWL_STYLE) & WS_VISIBLE) != 0) == positionMode) {
+            ShowWindow(control, positionMode ? SW_HIDE : SW_SHOW);
+        }
+        const bool enabled = snapshot.inputMode == InputMode::ManualAngles;
+        if (control && static_cast<bool>(IsWindowEnabled(control)) != enabled) {
+            EnableWindow(control, enabled);
         }
     }
-    const bool canExecute = snapshot.manualMode && snapshot.clientConnected && snapshot.positionFeedback;
+    for (HWND control : positionControls_) {
+        if (control && ((GetWindowLongPtr(control, GWL_STYLE) & WS_VISIBLE) != 0) != positionMode) {
+            ShowWindow(control, positionMode ? SW_SHOW : SW_HIDE);
+        }
+    }
+    if (executeControl_) {
+        SetWindowPos(executeControl_, nullptr, positionMode ? 714 : 564, ControlTop, 0, 0,
+            SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+    }
+    const bool canExecute = manualMode && snapshot.clientConnected && snapshot.positionFeedback
+        && (!positionMode || MotionController::SupportsActuatorPositions());
     if (executeControl_ && static_cast<bool>(IsWindowEnabled(executeControl_)) != canExecute) {
         EnableWindow(executeControl_, canExecute);
     }
 }
 
+void HmiWindow::ExecuteActuatorInput() {
+    ActuatorValues positions{};
+    for (int index = 0; index < 6; ++index) {
+        double value = 0;
+        if (!ReadInputValue(positionControls_[index], value)
+            || value < MotionSettings::MinimumActuatorInput || value > MotionSettings::MaximumActuatorInput) {
+            inputStatus_ = "Enter A1-A6 as finite PLC positions from 0 to 999.";
+            SetFocus(positionControls_[index]);
+            SendMessage(positionControls_[index], EM_SETSEL, 0, -1);
+            InvalidateRect(window_, nullptr, FALSE);
+            return;
+        }
+        positions[index] = static_cast<float>(std::round(value));
+    }
+    inputStatus_ = motion_.ExecuteActuatorInput(positions)
+        ? "Applied A1-A6. Positions are rounded to whole PLC units; edits require Execute again."
+        : "Connect the PLC and provide valid position feedback before Execute.";
+    InvalidateRect(window_, nullptr, FALSE);
+}
+
+bool HmiWindow::ReadInputValue(HWND control, double& value) {
+    char text[64]{};
+    GetWindowTextA(control, text, sizeof(text));
+    std::istringstream stream(text);
+    stream.imbue(std::locale::classic());
+    if (!(stream >> value) || !std::isfinite(value) || !(stream >> std::ws).eof()) {
+        SetFocus(control);
+        SendMessage(control, EM_SETSEL, 0, -1);
+        return false;
+    }
+    return true;
+}
+
 void HmiWindow::ExecuteManualInput() {
     double values[3]{};
     for (int index = 0; index < 3; ++index) {
-        char text[64]{};
-        GetWindowTextA(angleControls_[index], text, sizeof(text));
-        std::istringstream stream(text);
-        stream.imbue(std::locale::classic());
-        if (!(stream >> values[index]) || !std::isfinite(values[index]) || !(stream >> std::ws).eof()) {
+        if (!ReadInputValue(angleControls_[index], values[index])) {
             inputStatus_ = "Enter three finite numbers in degrees (decimal point: .).";
-            SetFocus(angleControls_[index]);
-            SendMessage(angleControls_[index], EM_SETSEL, 0, -1);
             InvalidateRect(window_, nullptr, FALSE);
             return;
         }
@@ -489,24 +564,34 @@ LRESULT HmiWindow::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
     }
     case WM_COMMAND:
         if (LOWORD(wParam) == SourceControlId && HIWORD(wParam) == CBN_SELCHANGE) {
-            motion_.SetManualMode(SendMessage(sourceControl_, CB_GETCURSEL, 0, 0) == 1);
+            const auto selection = SendMessage(sourceControl_, CB_GETCURSEL, 0, 0);
+            if (selection >= 0 && selection <= 2) {
+                motion_.SetInputMode(static_cast<InputMode>(selection));
+            }
             inputStatus_.clear();
             RefreshControls();
             InvalidateRect(window_, nullptr, FALSE);
             return 0;
         }
         if (LOWORD(wParam) == ExecuteControlId && HIWORD(wParam) == BN_CLICKED) {
-            ExecuteManualInput();
+            if (motion_.GetInputMode() == InputMode::ActuatorPositions) {
+                ExecuteActuatorInput();
+            }
+            else {
+                ExecuteManualInput();
+            }
             return 0;
         }
         break;
     case WM_LBUTTONDOWN: {
         const POINT mouse{ GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
         // The padded border belongs to the parent; clicking it focuses the native edit.
-        for (int index = 0; index < 3; ++index) {
-            const RECT field = AngleFieldBounds(index);
-            if (PtInRect(&field, mouse) && IsWindowEnabled(angleControls_[index])) {
-                SetFocus(angleControls_[index]);
+        const bool positions = motion_.GetInputMode() == InputMode::ActuatorPositions;
+        for (int index = 0; index < (positions ? 6 : 3); ++index) {
+            const RECT field = positions ? PositionFieldBounds(index) : AngleFieldBounds(index);
+            HWND control = positions ? positionControls_[index] : angleControls_[index];
+            if (PtInRect(&field, mouse) && IsWindowEnabled(control)) {
+                SetFocus(control);
                 return 0;
             }
         }
@@ -612,6 +697,8 @@ void HmiWindow::Paint() {
 }
 
 void HmiWindow::Render(HDC dc, const RECT& client, const DashboardSnapshot& snapshot) {
+    const bool manualMode = snapshot.inputMode != InputMode::Simulator;
+    const bool positionMode = snapshot.inputMode == InputMode::ActuatorPositions;
     FillRectangle(dc, client, Background);
     const int width = client.right - client.left;
     const int height = client.bottom - client.top;
@@ -621,7 +708,7 @@ void HmiWindow::Render(HDC dc, const RECT& client, const DashboardSnapshot& snap
         MakeRect(padding, 16, width - padding, 50), PrimaryText);
     DrawTextValue(dc, bodyFont_, "6DOF STEWART PLATFORM  /  " + targetName_ + "  /  " + endpoint_,
         MakeRect(padding, 49, width - padding, 72), SecondaryText);
-    DrawTextValue(dc, smallFont_, snapshot.manualMode ? "MANUAL INPUT" : "LIVE TELEMETRY",
+    DrawTextValue(dc, smallFont_, positionMode ? "ACTUATOR POSITIONS" : manualMode ? "MANUAL INPUT" : "LIVE TELEMETRY",
         MakeRect(width - 190, 22, width - padding, 46), Cyan,
         DT_RIGHT | DT_SINGLELINE | DT_VCENTER);
 
@@ -636,10 +723,10 @@ void HmiWindow::Render(HDC dc, const RECT& client, const DashboardSnapshot& snap
         width - padding, statusTop + statusHeight);
 
     DrawStatusCard(dc, simulatorCard, headingFont_, smallFont_, "MICROSOFT FLIGHT SIMULATOR 2020",
-        snapshot.manualMode ? "Manual mode" : snapshot.simulatorConnected ? "Connected" : "Disconnected",
-        snapshot.manualMode ? "MSFS connection is not required" : snapshot.simulatorConnected
+        manualMode ? "Manual mode" : snapshot.simulatorConnected ? "Connected" : "Disconnected",
+        manualMode ? "MSFS connection is not required" : snapshot.simulatorConnected
             ? "SimConnect is streaming aircraft data" : "Waiting for SimConnect",
-        snapshot.manualMode ? Cyan : snapshot.simulatorConnected ? Green : Red);
+        manualMode ? Cyan : snapshot.simulatorConnected ? Green : Red);
 
     std::string controllerStatus = "Waiting";
     std::string controllerDetail = "Opening TCP listener";
@@ -671,24 +758,26 @@ void HmiWindow::Render(HDC dc, const RECT& client, const DashboardSnapshot& snap
 
     DrawTextValue(dc, smallFont_, "INPUT SOURCE", MakeRect(24, 176, 204, 199), SecondaryText);
     const char* inputLabels[] = { "PITCH (deg)", "ROLL (deg)", "RUDDER (deg)" };
-    for (int index = 0; index < 3; ++index) {
-        DrawTextValue(dc, smallFont_, inputLabels[index],
-            MakeRect(224 + index * 110, 176, 324 + index * 110, 199), SecondaryText);
-        const RECT field = AngleFieldBounds(index);
+    for (int index = 0; index < (positionMode ? 6 : 3); ++index) {
+        const RECT field = positionMode ? PositionFieldBounds(index) : AngleFieldBounds(index);
+        DrawTextValue(dc, smallFont_, positionMode ? "A" + std::to_string(index + 1) : inputLabels[index],
+            MakeRect(field.left, 176, field.right, 199), SecondaryText);
         POINT cursor{};
         GetCursorPos(&cursor);
         ScreenToClient(window_, &cursor);
-        const bool focused = GetFocus() == angleControls_[index];
-        const COLORREF outline = !snapshot.manualMode ? Border : focused ? Cyan
+        const bool focused = GetFocus() == (positionMode ? positionControls_[index] : angleControls_[index]);
+        const COLORREF outline = !manualMode ? Border : focused ? Cyan
             : PtInRect(&field, cursor) ? HoverBorder : Border;
-        FillRoundedRectangle(dc, field, snapshot.manualMode ? PanelRaised : DisabledField, outline);
+        FillRoundedRectangle(dc, field, manualMode ? PanelRaised : DisabledField, outline);
     }
-    const std::string controlStatus = !snapshot.manualMode ? "Live MSFS controls the target"
-        : !snapshot.clientConnected || !snapshot.positionFeedback ? "Waiting for controller position feedback"
-        : snapshot.manualInputAvailable ? "Manual target active" : "Ready - press Execute to apply";
-    DrawTextValue(dc, bodyFont_, controlStatus, MakeRect(704, ControlTop, width - padding, ControlTop + ControlHeight), Cyan);
+    const std::string controlStatus = !manualMode ? "Live MSFS controls the target"
+        : !snapshot.clientConnected || !snapshot.positionFeedback ? "Waiting for feedback"
+        : snapshot.manualInputAvailable || snapshot.actuatorInputAvailable ? "Manual target active" : "Ready - press Execute";
+    DrawTextValue(dc, bodyFont_, controlStatus, MakeRect(positionMode ? 854 : 704, ControlTop,
+        width - padding, ControlTop + ControlHeight), Cyan);
     DrawTextValue(dc, smallFont_, inputStatus_.empty()
-        ? "Manual angles use MSFS signs and scaling; platform targets are limited to +/-30 degrees."
+        ? positionMode ? "A1-A6: absolute PLC positions (0-999). Execute applies all six with the existing step and speed limits."
+            : "Manual angles use MSFS signs and scaling; platform targets are limited to +/-30 degrees."
         : inputStatus_, MakeRect(padding, 245, width - padding, 269), SecondaryText);
 
     const int contentTop = statusTop + statusHeight + 116;
@@ -700,125 +789,144 @@ void HmiWindow::Render(HDC dc, const RECT& client, const DashboardSnapshot& snap
     FillRoundedRectangle(dc, leftPanel, Panel, Border);
     FillRoundedRectangle(dc, actuatorPanel, Panel, Border);
 
-    DrawTextValue(dc, headingFont_, "6DOF PLATFORM",
+    DrawTextValue(dc, headingFont_, positionMode ? "APPLIED ACTUATOR POSITIONS" : "6DOF PLATFORM",
         MakeRect(leftPanel.left + 18, leftPanel.top + 10, leftPanel.right - 18, leftPanel.top + 42), PrimaryText);
-    DrawTextValue(dc, smallFont_, "ORBIT VIEW  /  Drag: rotate  /  Wheel: zoom  /  Double-click: reset",
+    DrawTextValue(dc, smallFont_, positionMode ? "FINAL REQUEST  /  Controller units  /  Applied on Execute"
+        : "ORBIT VIEW  /  Drag: rotate  /  Wheel: zoom  /  Double-click: reset",
         MakeRect(leftPanel.left + 18, leftPanel.top + 36, leftPanel.right - 18, leftPanel.top + 60), SecondaryText);
 
     const int diagramLeft = leftPanel.left + 18;
     const int diagramRight = leftPanel.right - 18;
     const int diagramTop = leftPanel.top + 64;
     const int diagramBottom = (std::min)(leftPanel.top + 345, leftPanel.bottom - 229);
-    diagramBounds_ = MakeRect(diagramLeft, diagramTop, diagramRight, diagramBottom);
-    const int savedDc = SaveDC(dc);
-    IntersectClipRect(dc, diagramLeft, diagramTop, diagramRight, diagramBottom);
-    const double centerX = (diagramLeft + diagramRight) * 0.5;
-    const double centerY = (diagramTop + diagramBottom) * 0.5;
-    const double scale = orbitZoom_ * (std::min)((diagramRight - diagramLeft - 32) / 380.0,
-        (diagramBottom - diagramTop - 32) / 380.0);
-    const double azimuth = orbitAzimuth_ * Pi / 180.0;
-    const double elevation = orbitElevation_ * Pi / 180.0;
-
-    struct ProjectedPoint {
-        POINT screen;
-        double depth;
-    };
-    // Orthographic camera orbiting the center of the illustrative platform.
-    // These drawing dimensions do not represent physical actuator geometry.
-    const auto project = [&](const vec& point) -> ProjectedPoint {
-        const double horizontal = std::cos(azimuth) * point.x - std::sin(azimuth) * point.y;
-        const double forward = std::sin(azimuth) * point.x + std::cos(azimuth) * point.y;
-        const double vertical = std::cos(elevation) * point.z - std::sin(elevation) * forward;
-        return { { static_cast<LONG>(std::lround(centerX + horizontal * scale)),
-                   static_cast<LONG>(std::lround(centerY - vertical * scale)) },
-            std::cos(elevation) * forward + std::sin(elevation) * point.z };
-    };
-    auto attitude = rotation_matrix(static_cast<float>(snapshot.yawDegrees),
-        static_cast<float>(-snapshot.rollDegrees), static_cast<float>(snapshot.pitchDegrees));
-    std::array<ProjectedPoint, 6> basePoints{};
-    std::array<ProjectedPoint, 6> platformPoints{};
-    std::array<POINT, 6> platformPolygon{};
-    std::array<double, 7> depths{};
-    for (int index = 0; index < 6; ++index) {
-        const double angle = (-90.0 + index * 60.0) * Pi / 180.0;
-        basePoints[index] = project(vec{ static_cast<float>(std::cos(angle) * 150.0),
-            static_cast<float>(std::sin(angle) * 150.0), -80.0f });
-        vec top = dot_product(attitude, vec{ static_cast<float>(std::cos(angle) * 118.0),
-            static_cast<float>(std::sin(angle) * 118.0), 0.0f });
-        top.z += 80.0f;
-        platformPoints[index] = project(top);
-        platformPolygon[index] = platformPoints[index].screen;
-        depths[index] = (basePoints[index].depth + platformPoints[index].depth) * 0.5;
-        depths[6] += platformPoints[index].depth / 6.0;
+    diagramBounds_ = positionMode ? RECT{} : MakeRect(diagramLeft, diagramTop, diagramRight, diagramBottom);
+    if (positionMode) {
+        const int cardWidth = (diagramRight - diagramLeft - 20) / 3;
+        const int cardHeight = (diagramBottom - diagramTop - 10) / 2;
+        for (int index = 0; index < 6; ++index) {
+            const int x = diagramLeft + (index % 3) * (cardWidth + 10);
+            const int y = diagramTop + (index / 3) * (cardHeight + 10);
+            const RECT card = MakeRect(x, y, x + cardWidth, y + cardHeight);
+            FillRoundedRectangle(dc, card, PanelRaised, Border);
+            DrawTextValue(dc, smallFont_, "A" + std::to_string(index + 1),
+                MakeRect(x + 12, y + 5, card.right - 12, y + 29), SecondaryText);
+            DrawTextValue(dc, valueFont_, snapshot.actuatorInputAvailable
+                ? FormatNumber(snapshot.requestedPositions[index], 0) : "---",
+                MakeRect(x + 12, y + 30, card.right - 12, card.bottom - 8), Cyan);
+        }
     }
+    else {
+        const int savedDc = SaveDC(dc);
+        IntersectClipRect(dc, diagramLeft, diagramTop, diagramRight, diagramBottom);
+        const double centerX = (diagramLeft + diagramRight) * 0.5;
+        const double centerY = (diagramTop + diagramBottom) * 0.5;
+        const double scale = orbitZoom_ * (std::min)((diagramRight - diagramLeft - 32) / 380.0,
+            (diagramBottom - diagramTop - 32) / 380.0);
+        const double azimuth = orbitAzimuth_ * Pi / 180.0;
+        const double elevation = orbitElevation_ * Pi / 180.0;
 
-    // Paint farther parts first so orbiting reveals the nearer legs.
-    std::array<int, 7> drawOrder{ { 0, 1, 2, 3, 4, 5, 6 } };
-    std::stable_sort(drawOrder.begin(), drawOrder.end(), [&](int left, int right) {
-        return depths[left] < depths[right];
-    });
-    for (int index : drawOrder) {
-        if (index == 6) {
-            HBRUSH platformBrush = CreateSolidBrush(RGB(31, 103, 120));
-            HPEN platformPen = CreatePen(PS_SOLID, 2, Cyan);
-            HGDIOBJ oldBrush = SelectObject(dc, platformBrush);
-            HGDIOBJ oldPen = SelectObject(dc, platformPen);
-            Polygon(dc, platformPolygon.data(), static_cast<int>(platformPolygon.size()));
+        struct ProjectedPoint {
+            POINT screen;
+            double depth;
+        };
+        // Orthographic camera orbiting the center of the illustrative platform.
+        // These drawing dimensions do not represent physical actuator geometry.
+        const auto project = [&](const vec& point) -> ProjectedPoint {
+            const double horizontal = std::cos(azimuth) * point.x - std::sin(azimuth) * point.y;
+            const double forward = std::sin(azimuth) * point.x + std::cos(azimuth) * point.y;
+            const double vertical = std::cos(elevation) * point.z - std::sin(elevation) * forward;
+            return { { static_cast<LONG>(std::lround(centerX + horizontal * scale)),
+                       static_cast<LONG>(std::lround(centerY - vertical * scale)) },
+                std::cos(elevation) * forward + std::sin(elevation) * point.z };
+        };
+        auto attitude = rotation_matrix(static_cast<float>(snapshot.yawDegrees),
+            static_cast<float>(-snapshot.rollDegrees), static_cast<float>(snapshot.pitchDegrees));
+        std::array<ProjectedPoint, 6> basePoints{};
+        std::array<ProjectedPoint, 6> platformPoints{};
+        std::array<POINT, 6> platformPolygon{};
+        std::array<double, 7> depths{};
+        for (int index = 0; index < 6; ++index) {
+            const double angle = (-90.0 + index * 60.0) * Pi / 180.0;
+            basePoints[index] = project(vec{ static_cast<float>(std::cos(angle) * 150.0),
+                static_cast<float>(std::sin(angle) * 150.0), -80.0f });
+            vec top = dot_product(attitude, vec{ static_cast<float>(std::cos(angle) * 118.0),
+                static_cast<float>(std::sin(angle) * 118.0), 0.0f });
+            top.z += 80.0f;
+            platformPoints[index] = project(top);
+            platformPolygon[index] = platformPoints[index].screen;
+            depths[index] = (basePoints[index].depth + platformPoints[index].depth) * 0.5;
+            depths[6] += platformPoints[index].depth / 6.0;
+        }
+
+        // Paint farther parts first so orbiting reveals the nearer legs.
+        std::array<int, 7> drawOrder{ { 0, 1, 2, 3, 4, 5, 6 } };
+        std::stable_sort(drawOrder.begin(), drawOrder.end(), [&](int left, int right) {
+            return depths[left] < depths[right];
+        });
+        for (int index : drawOrder) {
+            if (index == 6) {
+                HBRUSH platformBrush = CreateSolidBrush(RGB(31, 103, 120));
+                HPEN platformPen = CreatePen(PS_SOLID, 2, Cyan);
+                HGDIOBJ oldBrush = SelectObject(dc, platformBrush);
+                HGDIOBJ oldPen = SelectObject(dc, platformPen);
+                Polygon(dc, platformPolygon.data(), static_cast<int>(platformPolygon.size()));
+                SelectObject(dc, oldPen);
+                SelectObject(dc, oldBrush);
+                DeleteObject(platformPen);
+                DeleteObject(platformBrush);
+                continue;
+            }
+            const POINT& base = basePoints[index].screen;
+            const POINT& top = platformPoints[index].screen;
+            const float position = snapshot.currentPositions[index];
+            const int thickness = snapshot.positionFeedback
+                ? 3 + static_cast<int>((std::max)(0.0f, (std::min)(4.0f, position / 100.0f)))
+                : 3;
+            HPEN legPen = CreatePen(PS_SOLID, thickness, snapshot.positionFeedback ? Cyan : RGB(74, 89, 103));
+            HGDIOBJ previousPen = SelectObject(dc, legPen);
+            MoveToEx(dc, base.x, base.y, nullptr);
+            LineTo(dc, top.x, top.y);
+            SelectObject(dc, previousPen);
+            DeleteObject(legPen);
+
+            HBRUSH mountBrush = CreateSolidBrush(SecondaryText);
+            HGDIOBJ oldBrush = SelectObject(dc, mountBrush);
+            HGDIOBJ oldPen = SelectObject(dc, GetStockObject(NULL_PEN));
+            Ellipse(dc, base.x - 4, base.y - 4, base.x + 4, base.y + 4);
             SelectObject(dc, oldPen);
             SelectObject(dc, oldBrush);
-            DeleteObject(platformPen);
-            DeleteObject(platformBrush);
-            continue;
+            DeleteObject(mountBrush);
         }
-        const POINT& base = basePoints[index].screen;
-        const POINT& top = platformPoints[index].screen;
-        const float position = snapshot.currentPositions[index];
-        const int thickness = snapshot.positionFeedback
-            ? 3 + static_cast<int>((std::max)(0.0f, (std::min)(4.0f, position / 100.0f)))
-            : 3;
-        HPEN legPen = CreatePen(PS_SOLID, thickness, snapshot.positionFeedback ? Cyan : RGB(74, 89, 103));
-        HGDIOBJ previousPen = SelectObject(dc, legPen);
-        MoveToEx(dc, base.x, base.y, nullptr);
-        LineTo(dc, top.x, top.y);
-        SelectObject(dc, previousPen);
-        DeleteObject(legPen);
 
-        HBRUSH mountBrush = CreateSolidBrush(SecondaryText);
-        HGDIOBJ oldBrush = SelectObject(dc, mountBrush);
-        HGDIOBJ oldPen = SelectObject(dc, GetStockObject(NULL_PEN));
-        Ellipse(dc, base.x - 4, base.y - 4, base.x + 4, base.y + 4);
-        SelectObject(dc, oldPen);
-        SelectObject(dc, oldBrush);
-        DeleteObject(mountBrush);
+        for (int index = 0; index < 6; ++index) {
+            const int labelX = (basePoints[index].screen.x + platformPoints[index].screen.x) / 2;
+            const int labelY = (basePoints[index].screen.y + platformPoints[index].screen.y) / 2;
+            RECT labelRect = MakeRect(labelX - 12, labelY - 11, labelX + 12, labelY + 11);
+            HBRUSH labelBrush = CreateSolidBrush(PanelRaised);
+            HGDIOBJ oldBrush = SelectObject(dc, labelBrush);
+            HGDIOBJ oldPen = SelectObject(dc, GetStockObject(NULL_PEN));
+            Ellipse(dc, labelRect.left, labelRect.top, labelRect.right, labelRect.bottom);
+            SelectObject(dc, oldPen);
+            SelectObject(dc, oldBrush);
+            DeleteObject(labelBrush);
+            DrawTextValue(dc, smallFont_, std::to_string(index + 1), labelRect, PrimaryText,
+                DT_CENTER | DT_SINGLELINE | DT_VCENTER);
+        }
+
+        RestoreDC(dc, savedDc);
     }
-
-    for (int index = 0; index < 6; ++index) {
-        const int labelX = (basePoints[index].screen.x + platformPoints[index].screen.x) / 2;
-        const int labelY = (basePoints[index].screen.y + platformPoints[index].screen.y) / 2;
-        RECT labelRect = MakeRect(labelX - 12, labelY - 11, labelX + 12, labelY + 11);
-        HBRUSH labelBrush = CreateSolidBrush(PanelRaised);
-        HGDIOBJ oldBrush = SelectObject(dc, labelBrush);
-        HGDIOBJ oldPen = SelectObject(dc, GetStockObject(NULL_PEN));
-        Ellipse(dc, labelRect.left, labelRect.top, labelRect.right, labelRect.bottom);
-        SelectObject(dc, oldPen);
-        SelectObject(dc, oldBrush);
-        DeleteObject(labelBrush);
-        DrawTextValue(dc, smallFont_, std::to_string(index + 1), labelRect, PrimaryText,
-            DT_CENTER | DT_SINGLELINE | DT_VCENTER);
-    }
-
-    RestoreDC(dc, savedDc);
 
     const int poseTop = diagramBottom + 8;
-    DrawTextValue(dc, smallFont_, snapshot.manualMode ? "APPLIED INPUT / PLATFORM TARGET (DEGREES)"
+    DrawTextValue(dc, smallFont_, positionMode ? "PLATFORM ANGLES: NOT CALCULATED IN THIS MODE"
+        : manualMode ? "APPLIED INPUT / PLATFORM TARGET (DEGREES)"
         : "MSFS / PLATFORM TARGET (DEGREES)",
         MakeRect(leftPanel.left + 18, poseTop, leftPanel.right - 18, poseTop + 24), SecondaryText);
     const int poseWidth = (leftPanel.right - leftPanel.left - 52) / 3;
     const char* poseLabels[] = { "PITCH", "ROLL", "RUDDER / YAW" };
     const double poseValues[] = {
-        snapshot.manualMode ? snapshot.manualInput.pitchDegrees : snapshot.simulatorPitchDegrees,
-        snapshot.manualMode ? snapshot.manualInput.rollDegrees : snapshot.simulatorRollDegrees,
-        snapshot.manualMode ? snapshot.manualInput.rudderDegrees : snapshot.simulatorRudderDegrees
+        manualMode ? snapshot.manualInput.pitchDegrees : snapshot.simulatorPitchDegrees,
+        manualMode ? snapshot.manualInput.rollDegrees : snapshot.simulatorRollDegrees,
+        manualMode ? snapshot.manualInput.rudderDegrees : snapshot.simulatorRudderDegrees
     };
     const bool poseAvailable[] = {
         snapshot.simulatorAttitudeAvailable, snapshot.simulatorAttitudeAvailable, snapshot.simulatorRudderAvailable
@@ -832,14 +940,14 @@ void HmiWindow::Render(HDC dc, const RECT& client, const DashboardSnapshot& snap
         const int middle = x + poseWidth / 2;
         FillRectangle(dc, MakeRect(middle, poseRect.top + 26, middle + 1, poseRect.bottom - 8), Border);
         const UINT centered = DT_CENTER | DT_SINGLELINE | DT_VCENTER;
-        DrawTextValue(dc, smallFont_, snapshot.manualMode ? "INPUT" : "MSFS",
+        DrawTextValue(dc, smallFont_, manualMode ? "INPUT" : "MSFS",
             MakeRect(x + 6, poseRect.top + 25, middle - 6, poseRect.top + 44), SecondaryText, centered);
         DrawTextValue(dc, smallFont_, "TARGET",
             MakeRect(middle + 6, poseRect.top + 25, poseRect.right - 6, poseRect.top + 44), Cyan, centered);
-        const bool rawAvailable = snapshot.manualMode ? snapshot.manualInputAvailable
+        const bool rawAvailable = manualMode ? snapshot.manualInputAvailable
             : snapshot.simulatorConnected && poseAvailable[index];
         const bool targetAvailable = rawAvailable && snapshot.motionAvailable
-            && (snapshot.manualMode || snapshot.simulatorAttitudeAvailable);
+            && (manualMode || snapshot.simulatorAttitudeAvailable);
         DrawTextValue(dc, valueFont_, rawAvailable ? FormatNumber(poseValues[index], 1) : "--.-",
             MakeRect(x + 6, poseRect.top + 44, middle - 6, poseRect.bottom - 6), PrimaryText, centered);
         DrawTextValue(dc, valueFont_, targetAvailable ? FormatNumber(platformValues[index], 1) : "--.-",
@@ -883,7 +991,7 @@ void HmiWindow::Render(HDC dc, const RECT& client, const DashboardSnapshot& snap
         const RECT card = MakeRect(left, top, left + cardWidth, top + cardHeight);
         DrawActuatorCard(dc, card, headingFont_, bodyFont_, smallFont_, index + 1,
             snapshot.currentPositions[index], snapshot.targetPositions[index], snapshot.speeds[index],
-            snapshot.positionFeedback, snapshot.motionAvailable);
+            snapshot.positionFeedback, snapshot.actuatorCommandAvailable, positionMode);
     }
 }
 

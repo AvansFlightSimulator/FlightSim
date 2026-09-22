@@ -62,10 +62,7 @@ PlatformAttitude CalculatePlatformAttitude(
 }
 
 MotionCommand CalculateMotion(const PlatformAttitude& attitude, const ActuatorValues& currentPositions) {
-    constexpr float controlStepSeconds = 1.0f / MotionSettings::ControlRateHz;
-    constexpr float maximumStep = MaximumStepPerSecond * controlStepSeconds;
-    MotionCommand command;
-    command.attitude = attitude;
+    ActuatorValues desiredPositions{};
 
     // Preserve the established geometry mapping: yaw about Z, negative platform
     // roll about Y, and platform pitch about X. Every leg shares this rotation.
@@ -78,10 +75,22 @@ MotionCommand CalculateMotion(const PlatformAttitude& attitude, const ActuatorVa
         const vec leg = startHeight + dot_product(rotation, platformLegs[index]) - baseLegs[index];
         const float geometricLength = leg.magnitude();
         // Convert geometric length to the controller's existing position reference.
-        const float desiredLength = std::round(
+        desiredPositions[index] = std::round(
             geometricLength - BaseLegLength + NeutralActuatorPosition);
+    }
 
-        const float requestedDelta = desiredLength - currentPositions[index];
+    auto command = CalculateActuatorMotion(desiredPositions, currentPositions);
+    command.attitude = attitude;
+    return command;
+}
+
+MotionCommand CalculateActuatorMotion(
+    const ActuatorValues& desiredPositions, const ActuatorValues& currentPositions) {
+    constexpr float controlStepSeconds = 1.0f / MotionSettings::ControlRateHz;
+    constexpr float maximumStep = MaximumStepPerSecond * controlStepSeconds;
+    MotionCommand command;
+    for (std::size_t index = 0; index < ActuatorCount; ++index) {
+        const float requestedDelta = desiredPositions[index] - currentPositions[index];
         const float limitedDelta = (std::max)(-maximumStep, (std::min)(requestedDelta, maximumStep));
         command.positions[index] = currentPositions[index] + limitedDelta;
 

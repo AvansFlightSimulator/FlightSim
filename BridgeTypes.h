@@ -8,6 +8,12 @@
 constexpr std::size_t ActuatorCount = 6;
 using ActuatorValues = std::array<float, ActuatorCount>;
 
+enum class InputMode {
+    Simulator,
+    ManualAngles,
+    ActuatorPositions
+};
+
 // Manual input uses the raw MSFS signs and degrees, including rudder (not heading).
 struct SimulatorInput {
     double pitchDegrees = 0.0;

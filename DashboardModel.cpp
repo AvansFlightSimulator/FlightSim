@@ -8,13 +8,29 @@ DashboardModel::DashboardModel()
     : startTime_(std::chrono::steady_clock::now()) {
 }
 
-void DashboardModel::SetManualMode(bool manual) {
+void DashboardModel::SetInputMode(InputMode mode) {
     std::lock_guard<std::mutex> lock(mutex_);
-    state_.manualMode = manual;
+    state_.inputMode = mode;
     state_.manualInputAvailable = false;
+    state_.actuatorInputAvailable = false;
+    state_.actuatorCommandAvailable = false;
     state_.motionAvailable = false;
     state_.targetPositions = {};
     state_.speeds = {};
+}
+
+void DashboardModel::SetActuatorInput(const ActuatorValues& positions) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    state_.requestedPositions = positions;
+    state_.actuatorInputAvailable = true;
+}
+
+void DashboardModel::UpdateActuatorMotion(const ActuatorValues& positions, const ActuatorValues& speeds) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    state_.targetPositions = positions;
+    state_.speeds = speeds;
+    state_.actuatorCommandAvailable = true;
+    state_.motionAvailable = false;
 }
 
 void DashboardModel::SetManualInput(const SimulatorInput& input) {
@@ -89,6 +105,7 @@ void DashboardModel::UpdateMotion(
     state_.yawDegrees = yawDegrees;
     state_.targetPositions = targetPositions;
     state_.speeds = speeds;
+    state_.actuatorCommandAvailable = true;
     state_.motionAvailable = true;
 }
 

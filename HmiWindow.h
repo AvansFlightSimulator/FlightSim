@@ -39,6 +39,8 @@ private:
     bool CreateControls(HINSTANCE instance);
     void RefreshControls();
     void ExecuteManualInput();
+    void ExecuteActuatorInput();
+    bool ReadInputValue(HWND control, double& value);
     void DrawSourceControl(HDC dc);
     void DrawControl(const DRAWITEMSTRUCT& item);
 
@@ -49,6 +51,7 @@ private:
     HWND window_ = nullptr;
     HWND sourceControl_ = nullptr;
     HWND angleControls_[3]{};
+    HWND positionControls_[6]{};
     HWND executeControl_ = nullptr;
     WNDPROC originalSourceProcedure_ = nullptr;
     HBRUSH fieldBrush_ = nullptr;

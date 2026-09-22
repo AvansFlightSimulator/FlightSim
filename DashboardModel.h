@@ -26,9 +26,12 @@ struct DashboardSnapshot {
     bool clientConnected = false;
     bool positionFeedback = false;
     bool motionAvailable = false;
-    bool manualMode = false;
+    InputMode inputMode = InputMode::Simulator;
     bool manualInputAvailable = false;
     SimulatorInput manualInput;
+    bool actuatorInputAvailable = false;
+    bool actuatorCommandAvailable = false;
+    ActuatorValues requestedPositions{};
 
     ActuatorValues currentPositions{};
     ActuatorValues targetPositions{};
@@ -59,8 +62,10 @@ public:
     DashboardModel();
 
     void SetSimulatorConnected(bool connected);
-    void SetManualMode(bool manual);
+    void SetInputMode(InputMode mode);
     void SetManualInput(const SimulatorInput& input);
+    void SetActuatorInput(const ActuatorValues& positions);
+    void UpdateActuatorMotion(const ActuatorValues& positions, const ActuatorValues& speeds);
     void SetTcpListening(bool listening);
     void SetClientConnected(bool connected);
     void UpdateFeedback(const ActuatorValues& positions);
