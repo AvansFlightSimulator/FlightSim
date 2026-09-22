@@ -133,7 +133,7 @@ int main() {
             if (simulator.IsConnected()) {
                 simulator.CloseSimConnect();
             }
-            motion.TickManual(server.isConnected() && server.hasPositionFeedback(), server.getCurrentPositions(), now);
+            motion.TickManual(server.isConnected() && server.hasPositionFeedback(), now);
             Sleep(5);
             continue;
         }

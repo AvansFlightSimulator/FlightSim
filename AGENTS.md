@@ -68,8 +68,8 @@ has an MSFS/manual selector, pitch/roll/rudder degree fields, and Execute. Selec
 manual closes SimConnect and suspends retries without requesting a move. Execute
 requires a connected controller with valid position feedback and applies all three
 finite inputs together. Edits remain drafts until Execute. Manual calculations run
-on the main loop every nominal 50 ms using the same geometry and feedback-relative
-step/speed limits. Cards compare applied INPUT with TARGET in manual mode; no raw
+on the main loop every nominal 50 ms using the same geometry, final actuator targets,
+and Point-to-Point velocity limit. Cards compare applied INPUT with TARGET in manual mode; no raw
 simulator telemetry is fabricated. Source changes clear the payload and applied
 manual input; returning to manual requires Execute again. The applied manual target
 is retained across controller reconnect, with output gated on new valid feedback.
@@ -87,9 +87,9 @@ The owner requested a third mode that independently sets absolute actuator
 positions, e.g. A1 = 200 and A2 = 300, and confirmed **PLC only for now**. PLC builds
 now offer Actuator positions alongside live MSFS and manual angles. Its six initially
 empty fields are drafts until Execute applies all six together. Existing actuator
-order, connection/feedback gate, 50 ms calculation cadence, and step/speed limits
-are retained. Shared CalculateActuatorMotion applies the existing limits after
-geometry for angle modes, or directly to requested positions in the third mode.
+order, connection/feedback gate, and 50 ms calculation cadence are retained. Shared
+CalculateActuatorMotion clamps final targets after geometry for angle modes, or
+directly clamps requested positions in the third mode.
 No geometry or orientation is inferred from independent position requests.
 
 Direct input accepts finite values within the existing PLC representation 0..999
@@ -97,11 +97,28 @@ and rounds them to whole positions. This is input/protocol validation, not an
 owner-confirmed physical travel range or a check that arbitrary positions are
 mechanically reachable. Invalid entries leave the prior applied request unchanged.
 The HMI shows six applied final positions instead of the orbit drawing, with
-orientation unavailable; actuator cards show the feedback-relative intermediate
-commands separately and use controller-unit labels. Changing any input mode clears
+orientation unavailable; actuator cards show feedback and final commands separately
+and use controller-unit labels. Changing any input mode clears
 the active payload and applied-input availability. Reentering either manual mode
 requires Execute. Applied targets survive controller reconnect, subject to new
 valid feedback. Unity retains its two modes and unchanged protocol.
+
+## Point-to-Point command milestone
+
+The owner confirmed that the CODESYS side uses `MC_MoveAbsolute_Festo` with
+`ContinuousUpdate` and passes Position, Velocity, Acceleration, Deceleration, and
+Jerk to a CMMT-AS drive in Point-to-Point mode. C++ now sends each final actuator
+position directly instead of creating feedback-relative 20-unit intermediate
+positions every 50 ms. `MaximumStepPerSecond` and the distance/interval velocity
+calculation were removed. Their effective 400 controller-unit/s ceiling is now an
+explicit Point-to-Point velocity limit on every actuator command; acceleration,
+deceleration, jerk, and the physical trajectory remain PLC/drive responsibilities.
+
+Final targets are clamped to the existing 0..999 controller representation before
+serialization. This remains a protocol/software bound, not a confirmed physical
+travel range. Position feedback still gates output after each connection and feeds
+the HMI and diagnostics. It no longer enters inverse kinematics or final target
+construction. The nominal calculation and output schedules remain 50 ms.
 
 ## Working with the owner
 
@@ -117,12 +134,12 @@ valid feedback. Unity retains its two modes and unchanged protocol.
 ## Architecture and file map
 
 ```text
-MSFS -> SimConnect -> MotionController [live input filter] -> Stewart geometry -> step limits -> payload
-HMI manual angles -----> MotionController -------------------> Stewart geometry -> step limits -> payload
-HMI A1-A6 positions ---> MotionController ---------------------------------------> step limits -> payload
+MSFS -> SimConnect -> MotionController [live input filter] -> Stewart geometry -> final targets -> payload
+HMI manual angles -----> MotionController -------------------> Stewart geometry -> final targets -> payload
+HMI A1-A6 positions ---> MotionController ---------------------------------------> final targets -> payload
                                                                                                |
 PLC / Unity <- newline-delimited JSON <- TCP output worker (20 Hz) <----------------------------+
-PLC / Unity -> position feedback -> TCP receive worker -> motion calculation
+PLC / Unity -> position feedback -> TCP receive worker -> HMI / output gate
 All components -> synchronized DashboardModel -> Win32/GDI HMI
 ```
 
@@ -139,7 +156,8 @@ All components -> synchronized DashboardModel -> Win32/GDI HMI
   pitch, bank, and rudder samples. Manual modes do not use this filter.
 - `BridgeTypes.h`: common actuator count/array, platform attitude, and command types.
 - `MotionCalculator.h/.cpp`: pure attitude mapping and motion calculations, physical
-  mounting coordinates, calibration, shared geometric/direct actuator limits, and 50 ms control interval.
+  mounting coordinates, calibration, shared final-target bounds, Point-to-Point
+  velocity limit, and 50 ms control interval.
 - `ControllerProtocol.h/.cpp`: PLC/Unity serialization, feedback validation, and
   incremental message framing; independent of Winsock and SimConnect.
 - `calculate_legs.h/.cpp`: vector operations and Euler rotation geometry. Keep
@@ -180,8 +198,9 @@ cleanup; a simulator quit event also ends the application.
   A complete single JSON object without a newline is also accepted for legacy
   clients. Invalid JSON, wrong counts, and nonnumeric values leave positions
   unchanged. TCP reads may contain partial or multiple messages.
-- Calculations run at most every 50 ms. A separate output worker sends the latest
-  payload on a nominal 50 ms schedule. This is not a hard real-time guarantee.
+- Calculations run at most every 50 ms. Each calculation publishes the final desired
+  actuator positions without interpolating from feedback. A separate output worker
+  sends the latest payload on a nominal 50 ms schedule. This is not a hard real-time guarantee.
 - Live pitch, bank, and rudder are filtered before the existing attitude mapping and
   Stewart geometry. The first valid sample after startup, reconnect, or source reset
   initializes immediately. The default 120 ms time constant is update-interval aware;
@@ -192,8 +211,8 @@ cleanup; a simulator quit event also ends the application.
   yaw comes from rudder deflection divided by 1.5 before negation/halving, not aircraft heading. Each attitude
   axis is clamped to +/-30 degrees. Geometry receives yaw, negated roll, pitch.
 - Current constants include neutral position 200, base leg length
-  1156.372420286821, start height 1079, maximum step rate 400 per second
-  (20 per calculation), and speed bounds 2..500. Confirm physical units and
+  1156.372420286821, start height 1079, and a Point-to-Point velocity limit of 400.
+  Final position commands are clamped to the existing 0..999 controller range. Confirm physical units and
   hardware limits with the owner before changing or interpreting these values.
 
 Do not describe the feedback gate as a freshness watchdog: no feedback-age timeout
@@ -240,13 +259,17 @@ ctest --test-dir build -C Debug --output-on-failure -E "controller_protocol_test
 
 - Geometry tests check neutral symmetry and finite positive lengths at selected
   boundary poses. Dashboard tests check telemetry updates and disconnect state.
-  Motion tests preserve current mapping, step/speed limits, and actuator order.
+  Motion tests preserve current mapping and actuator order, and check direct final
+  targets, both directions, equal targets, controller bounds, target replacement,
+  and the fixed Point-to-Point velocity limit.
   The current level-pose calibration rounds to 201, despite reference position 200.
 - When nlohmann/json is found, build controller_protocol_tests and motion_controller_tests before CTest. It
   checks both PLC formats, Unity, malformed feedback, fragmentation, combined
   messages, legacy framing, and stream reset; it does not require Windows or MSFS.
   Then run CTest without the -E exclusion to execute all six suites. Motion-controller tests cover live filtering, manual execution without MSFS,
-  angle/actuator input mapping and validation, feedback gating, source isolation, cadence, rounding, and repeated motion steps.
+  angle/actuator input mapping and validation, feedback gating, source isolation,
+  cadence, rounding, and replacement of a target while feedback shows the prior
+  move is still in progress.
 - For relevant runtime changes, validate startup without MSFS/client, reconnects,
   orderly shutdown, feedback gating, fragmented/combined messages, and nominal
   20 Hz output. Exercise both target modes when changing shared protocol code.

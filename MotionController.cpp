@@ -111,7 +111,7 @@ bool MotionController::ExecuteManualInput(const SimulatorInput& input) {
     return true;
 }
 
-void MotionController::TickManual(bool hasFeedback, const ActuatorValues& currentPositions,
+void MotionController::TickManual(bool hasFeedback,
     std::chrono::steady_clock::time_point now) {
     if (inputMode_ == InputMode::Simulator || !manualInputActive_ || now < nextManualCalculation_) {
         return;
@@ -119,17 +119,17 @@ void MotionController::TickManual(bool hasFeedback, const ActuatorValues& curren
     nextManualCalculation_ = now + MotionSettings::ControlInterval;
     if (inputMode_ == InputMode::ActuatorPositions) {
         if (hasFeedback) {
-            const auto command = CalculateActuatorMotion(actuatorPositions_, currentPositions);
+            const auto command = CalculateActuatorMotion(actuatorPositions_);
             dashboard_.UpdateActuatorMotion(command.positions, command.speeds);
             PublishCommand(command);
         }
         return;
     }
-    UpdateAttitude(manualAttitude_, hasFeedback, currentPositions);
+    UpdateAttitude(manualAttitude_, hasFeedback);
 }
 
 void MotionController::UpdateSimulatorInput(double pitchRadians, double bankRadians, double rudderDegrees,
-    bool hasFeedback, const ActuatorValues& currentPositions, std::chrono::steady_clock::time_point now) {
+    bool hasFeedback, std::chrono::steady_clock::time_point now) {
     if (inputMode_ != InputMode::Simulator) {
         return;
     }
@@ -147,21 +147,21 @@ void MotionController::UpdateSimulatorInput(double pitchRadians, double bankRadi
     if (!simulatorInputFilter_.Update(rawInput, now, filteredInput)) {
         return;
     }
-    UpdateAttitude(MapSimulatorInput(filteredInput), hasFeedback, currentPositions);
+    UpdateAttitude(MapSimulatorInput(filteredInput), hasFeedback);
 }
 
 void MotionController::ResetSimulatorInputFilter() noexcept {
     simulatorInputFilter_.Reset();
 }
 
-void MotionController::UpdateAttitude(const PlatformAttitude& attitude,
-    bool hasFeedback, const ActuatorValues& currentPositions) {
+void MotionController::UpdateAttitude(const PlatformAttitude& attitude, bool hasFeedback) {
     dashboard_.UpdateOrientation(attitude.pitchDegrees, attitude.rollDegrees, attitude.yawDegrees);
-    // Step limits are relative to measured actuator positions, never an assumed pose.
+    // Feedback still gates output, but the drive owns the physical trajectory to
+    // the final inverse-kinematics target.
     if (!hasFeedback) {
         return;
     }
-    const auto command = CalculateMotion(attitude, currentPositions);
+    const auto command = CalculateMotion(attitude);
     dashboard_.UpdateMotion(attitude.pitchDegrees, attitude.rollDegrees, attitude.yawDegrees,
         command.positions, command.speeds);
     PublishCommand(command);

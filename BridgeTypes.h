@@ -4,7 +4,8 @@
 #include <cstddef>
 
 // Index 0..5 always follows the physical actuator order in MotionCalculator.cpp.
-// Positions and speeds use the existing controller units; these are not angles.
+// Positions and Point-to-Point velocity limits use the existing controller units;
+// these are not angles.
 constexpr std::size_t ActuatorCount = 6;
 using ActuatorValues = std::array<float, ActuatorCount>;
 

@@ -20,18 +20,17 @@ public:
     bool ExecuteManualInput(const SimulatorInput& input);
     static bool SupportsActuatorPositions() noexcept;
     bool ExecuteActuatorInput(const ActuatorValues& positions);
-    void TickManual(bool hasFeedback, const ActuatorValues& currentPositions,
+    void TickManual(bool hasFeedback,
         std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now());
     void UpdateSimulatorInput(double pitchRadians, double bankRadians, double rudderDegrees,
-        bool hasFeedback, const ActuatorValues& currentPositions,
+        bool hasFeedback,
         std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now());
     void ResetSimulatorInputFilter() noexcept;
     bool TryGetLatestPayload(std::string& payload) const;
 
 private:
     void PublishCommand(const MotionCommand& command);
-    void UpdateAttitude(const PlatformAttitude& attitude,
-        bool hasFeedback, const ActuatorValues& currentPositions);
+    void UpdateAttitude(const PlatformAttitude& attitude, bool hasFeedback);
 
     DashboardModel& dashboard_;
     InputMode inputMode_ = InputMode::Simulator;

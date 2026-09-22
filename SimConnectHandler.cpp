@@ -95,7 +95,7 @@ void SimConnectHandler::HandleOrientation(double pitchRadians, double bankRadian
         return;
     }
     motion_.UpdateSimulatorInput(pitchRadians, bankRadians, rudderDeflectionDegrees_,
-        server_.hasPositionFeedback(), server_.getCurrentPositions(), timestamp);
+        server_.hasPositionFeedback(), timestamp);
 }
 
 bool SimConnectHandler::QuitRequested() const noexcept {

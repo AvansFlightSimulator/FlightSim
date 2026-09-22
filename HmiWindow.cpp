@@ -776,7 +776,7 @@ void HmiWindow::Render(HDC dc, const RECT& client, const DashboardSnapshot& snap
     DrawTextValue(dc, bodyFont_, controlStatus, MakeRect(positionMode ? 854 : 704, ControlTop,
         width - padding, ControlTop + ControlHeight), Cyan);
     DrawTextValue(dc, smallFont_, inputStatus_.empty()
-        ? positionMode ? "A1-A6: absolute PLC positions (0-999). Execute applies all six with the existing step and speed limits."
+        ? positionMode ? "A1-A6: absolute PLC positions (0-999). Execute sends all six as final Point-to-Point targets."
             : "Manual angles use MSFS signs and scaling; platform targets are limited to +/-30 degrees."
         : inputStatus_, MakeRect(padding, 245, width - padding, 269), SecondaryText);
 

@@ -13,9 +13,6 @@ constexpr double Pi = 3.14159265358979323846;
 constexpr double MaximumPitchDegrees = 30.0;
 constexpr double MaximumRollDegrees = 30.0;
 constexpr double MaximumYawDegrees = 30.0;
-constexpr float SpeedLimit = 500.0f;
-constexpr float MinimumSpeed = 2.0f;
-constexpr float MaximumStepPerSecond = 400.0f;
 constexpr float BaseLegLength = 1156.372420286821f;
 constexpr float NeutralActuatorPosition = 200.0f;
 
@@ -61,7 +58,7 @@ PlatformAttitude CalculatePlatformAttitude(
     return attitude;
 }
 
-MotionCommand CalculateMotion(const PlatformAttitude& attitude, const ActuatorValues& currentPositions) {
+MotionCommand CalculateMotion(const PlatformAttitude& attitude) {
     ActuatorValues desiredPositions{};
 
     // Preserve the established geometry mapping: yaw about Z, negative platform
@@ -79,26 +76,19 @@ MotionCommand CalculateMotion(const PlatformAttitude& attitude, const ActuatorVa
             geometricLength - BaseLegLength + NeutralActuatorPosition);
     }
 
-    auto command = CalculateActuatorMotion(desiredPositions, currentPositions);
+    auto command = CalculateActuatorMotion(desiredPositions);
     command.attitude = attitude;
     return command;
 }
 
-MotionCommand CalculateActuatorMotion(
-    const ActuatorValues& desiredPositions, const ActuatorValues& currentPositions) {
-    constexpr float controlStepSeconds = 1.0f / MotionSettings::ControlRateHz;
-    constexpr float maximumStep = MaximumStepPerSecond * controlStepSeconds;
+MotionCommand CalculateActuatorMotion(const ActuatorValues& desiredPositions) {
     MotionCommand command;
     for (std::size_t index = 0; index < ActuatorCount; ++index) {
-        const float requestedDelta = desiredPositions[index] - currentPositions[index];
-        const float limitedDelta = (std::max)(-maximumStep, (std::min)(requestedDelta, maximumStep));
-        command.positions[index] = currentPositions[index] + limitedDelta;
-
-        const float distance = std::fabs(limitedDelta);
-        // Even a stationary actuator retains the existing minimum speed command.
-        command.speeds[index] = (std::max)(
-            MinimumSpeed,
-            (std::min)(distance / controlStepSeconds, SpeedLimit));
+        command.positions[index] = (std::max)(MotionSettings::MinimumActuatorInput,
+            (std::min)(desiredPositions[index], MotionSettings::MaximumActuatorInput));
+        // Velocity is a limit for the CMMT-AS Point-to-Point move. It does not
+        // imply that the target should be reached within one C++ update interval.
+        command.speeds[index] = MotionSettings::PointToPointVelocityLimit;
     }
 
     return command;
