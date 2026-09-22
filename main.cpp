@@ -17,9 +17,20 @@
 #include <thread>
 
 namespace {
+// Interval used by the output worker to send motion commands. Derived from
+// MotionSettings so the send rate matches the configured control loop rate.
 constexpr auto OutputInterval = MotionSettings::ControlInterval;
+
+// How long to wait before retrying a SimConnect initialization after a
+// failure. This keeps reconnect attempts from spinning too quickly.
 constexpr auto SimConnectRetryInterval = std::chrono::seconds(5);
 
+// PrintStartupBanner
+// -------------------
+// Prints a small informational banner to stdout describing the current build
+// settings, network endpoint, number of actuators, and output rate. This is
+// useful during startup to confirm which configuration the application is
+// running with.
 void PrintStartupBanner() {
     std::cout
         << "========================================\n"
@@ -32,6 +43,12 @@ void PrintStartupBanner() {
         << "========================================\n";
 }
 
+// ProcessWindowsMessages
+// -----------------------
+// Pumps the Win32 message queue and forwards control messages to the HMI
+// window. Returns false if a WM_QUIT message was received which signals the
+// application should exit. Any messages not handled by the HMI are translated
+// and dispatched normally.
 bool ProcessWindowsMessages(HmiWindow& hmi) {
     MSG message;
     while (PeekMessage(&message, nullptr, 0, 0, PM_REMOVE)) {
@@ -46,6 +63,13 @@ bool ProcessWindowsMessages(HmiWindow& hmi) {
     return true;
 }
 
+// FeedbackThreadMethod
+// --------------------
+// Dedicated worker that accepts a TCP client and receives feedback packets
+// (position reports) from the networked motion source. The thread loops
+// until stopRequested becomes true. If no client is connected it repeatedly
+// tries to accept one; on accept failure it waits briefly and retries so the
+// thread does not spin.
 void FeedbackThreadMethod(TCPServer& server, const std::atomic<bool>& stopRequested) {
     while (!stopRequested) {
         if (!server.isConnected()) {
@@ -59,10 +83,20 @@ void FeedbackThreadMethod(TCPServer& server, const std::atomic<bool>& stopReques
             }
         }
 
+        // Blocking call that reads incoming feedback messages and updates the
+        // server's internal state (e.g., last-known actuator positions).
         server.receiveData();
     }
 }
 
+// OutputThreadMethod
+// ------------------
+// Periodic sender running at MotionSettings::ControlInterval. When a
+// connected client has provided position feedback and the motion controller
+// has a fresh payload, the worker sends the motion command over TCP, logs
+// the protocol message, and updates the dashboard metrics. The loop uses a
+// steady_clock sleep_until pattern to maintain a stable periodic cadence and
+// prevents catch-up bursts after long delays.
 void OutputThreadMethod(
     TCPServer& server,
     const MotionController& motion,
@@ -74,7 +108,8 @@ void OutputThreadMethod(
     while (!stopRequested) {
         nextWakeup += OutputInterval;
 
-        // This gate requires a first valid sample, not a feedback-age watchdog.
+        // Only send when: client connected, we have position feedback, and a
+        // newly calculated payload is available from the motion controller.
         if (server.isConnected()
             && server.hasPositionFeedback()
             && motion.TryGetLatestPayload(payload)) {
@@ -84,9 +119,11 @@ void OutputThreadMethod(
             }
         }
 
+        // Sleep until the next scheduled send time to maintain a steady rate.
         std::this_thread::sleep_until(nextWakeup);
 
-        // Do not run a burst of catch-up sends after a delayed cycle.
+        // Avoid running a burst of sends if we fell behind; reset the schedule
+        // to 'now' so the loop resumes a normal cadence.
         const auto now = std::chrono::steady_clock::now();
         if (now > nextWakeup + OutputInterval) {
             nextWakeup = now;
