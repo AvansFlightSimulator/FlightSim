@@ -40,12 +40,23 @@ const vec platformLegs[ActuatorCount] = {
 
 const vec startHeight{ 0.0f, 0.0f, 1079.0f };
 
+double ScaleAngle(double degrees) {
+    const double a = degrees;
+    const double x = degrees;
+    const double ymax = 30;
+    const double n = 4;
+    const double Ymax = pow(ymax, n);
+    const double AX = pow((a * x), n);
+
+    const double scaledDegree = (ymax * ((a * x) / (pow(AX + Ymax, n), 1 / n)));
+    return scaledDegree;
+}
 // Scaling and limiting are separate steps: halving is normal motion mapping.
-double ScaleAndLimitAngle(double degrees, double limit) {
-    const double scaledDegrees = degrees / 2.0;
-    return (std::max)(-limit, (std::min)(scaledDegrees, limit));
+double LimitAngle(double degrees, double limit) {
+    return (std::max)(-limit, (std::min)(ScaleAngle(degrees), limit));
 }
 }
+
 
 double RadiansToDegrees(double radians) {
     return radians * (180.0 / Pi);
@@ -54,10 +65,10 @@ double RadiansToDegrees(double radians) {
 PlatformAttitude CalculatePlatformAttitude(
     double pitchRadians, double bankRadians, double rudderDegrees) {
     PlatformAttitude attitude;
-    attitude.pitchDegrees = ScaleAndLimitAngle(-RadiansToDegrees(pitchRadians), MaximumPitchDegrees);
-    attitude.rollDegrees = ScaleAndLimitAngle(RadiansToDegrees(bankRadians), MaximumRollDegrees);
+    attitude.pitchDegrees = LimitAngle(-RadiansToDegrees(pitchRadians), MaximumPitchDegrees);
+    attitude.rollDegrees = LimitAngle(RadiansToDegrees(bankRadians), MaximumRollDegrees);
     // Platform yaw comes from rudder deflection, not aircraft heading.
-    attitude.yawDegrees = ScaleAndLimitAngle(-rudderDegrees, MaximumYawDegrees);
+    attitude.yawDegrees = LimitAngle(-rudderDegrees, MaximumYawDegrees);
     return attitude;
 }
 
