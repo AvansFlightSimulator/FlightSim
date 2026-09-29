@@ -207,3 +207,22 @@ unavailable in these runtime checks; no physical hardware was operated.
 - Repeat the protocol checks in both `TARGET_PLC` and `TARGET_UNITY` modes.
 
 See the [project wiki](https://gitlab.com/AvansInformatica/flight-simulator/flight-simulator/-/wikis/home) for additional information.
+# CSP control option (PLC 2.1.0)
+
+`BuildMode.h` now selects PP (`FLIGHTSIM_PLC_CONTROL_MODE=1`, default) or CSP
+(`=8`). Match the PLC's `CSP_Config.ControlMode`. CSP retains the existing
+inverse kinematics and configurable pre-IK MSFS smoothing, but sends six
+fractional final actuator positions; the PLC creates the intermediate motion.
+PP and Unity retain the existing feedback-relative steps and speed magnitudes.
+`MSFS_FILTER_TIME_CONSTANT_MS` in the same header defaults to 120 ms.
+
+The existing PLC 2.1.0 project contains a single six-axis EtherCAT trajectory
+task, CiA402 transition handling, jerk-limited planning/braking, a valid-frame
+watchdog and CSP diagnostics. Its accompanying `CSP/README.md` documents the
+configuration and required manual EtherCAT commissioning, including cyclic
+0x60F4 mapping and drive interpolation timing. CSP is initially gated by
+`Commissioned=FALSE`. No hardware operation is established by an offline build.
+
+The diagnostics page accepts PP version 1 and CSP version 2 feedback. CSP adds
+PLC command position, velocity and acceleration to recording/replay and graphs.
+PP/CSP selection is a configuration/build choice, not a live HMI switch.
