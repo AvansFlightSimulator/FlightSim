@@ -105,6 +105,17 @@ valid feedback. Unity retains its two modes and unchanged protocol.
 
 ## Working with the owner
 
+The owner confirmed that the CMMT-AS should own servo regulation, rather than
+implementing a replacement position-control loop on the PC or PLC. This is a
+desired control responsibility, not an implemented change. The current PC still
+recalculates position steps and speed magnitudes from measured position every
+50 ms in CalculateActuatorMotion. The supplied PLC uses MC_MoveAbsolute_Festo
+with ContinuousUpdate for these commands. The September 29 recording shows
+overshoot and repeated error-dependent speed changes; it does not establish that
+the drive's internal control loops are inactive or isolate the sole cause of the
+oscillation. Confirm active drive mode and motion-profile settings before changing
+this command-generation behavior.
+
 - Read this guide and `README.md` before making changes; inspect the relevant
   source for implementation details.
 - Ask before assuming missing goals, requirements, hardware specifications,
