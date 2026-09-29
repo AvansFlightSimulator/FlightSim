@@ -1,4 +1,5 @@
 #include "MotionCalculator.h"
+#include "BuildMode.h"
 
 #include "calculate_legs.h"
 
@@ -94,8 +95,8 @@ MotionCommand CalculateMotion(const PlatformAttitude& attitude, const ActuatorVa
         const vec leg = startHeight + dot_product(rotation, platformLegs[index]) - baseLegs[index];
         const float geometricLength = leg.magnitude();
         // Convert geometric length to the controller's existing position reference.
-        desiredPositions[index] = std::round(
-            geometricLength - BaseLegLength + NeutralActuatorPosition);
+        const float desired = geometricLength - BaseLegLength + NeutralActuatorPosition;
+        desiredPositions[index] = USE_PLC_CSP ? desired : std::round(desired);
     }
 
     auto command = CalculateActuatorMotion(desiredPositions, currentPositions);
@@ -108,6 +109,12 @@ MotionCommand CalculateActuatorMotion(
     constexpr float controlStepSeconds = 1.0f / MotionSettings::ControlRateHz;
     constexpr float maximumStep = MaximumStepPerSecond * controlStepSeconds;
     MotionCommand command;
+    if (USE_PLC_CSP) {
+        command.positions = desiredPositions;
+        // Speeds are unused in CSP. Preserve the field for existing diagnostics.
+        command.speeds.fill(0.0f);
+        return command;
+    }
     for (std::size_t index = 0; index < ActuatorCount; ++index) {
         const float requestedDelta = desiredPositions[index] - currentPositions[index];
         const float limitedDelta = (std::max)(-maximumStep, (std::min)(requestedDelta, maximumStep));

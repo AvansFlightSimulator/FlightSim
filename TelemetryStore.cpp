@@ -62,7 +62,8 @@ bool TelemetryStore::Decode(const std::string& kind, const std::string& payload,
             else {
                 const auto diagnostics = object.find("diagnostics");
                 if (diagnostics != object.end()) {
-                    if (!diagnostics->is_object() || diagnostics->value("version", 0) != 1)
+                    if (!diagnostics->is_object()
+                        || (diagnostics->value("version", 0) != 1 && diagnostics->value("version", 0) != 2))
                         throw std::runtime_error("Unsupported diagnostics version");
                     read(*diagnostics, "driveTargetPositions", TelemetrySignal::DriveTarget);
                     read(*diagnostics, "actualPositions", TelemetrySignal::DrivePosition);
@@ -70,6 +71,9 @@ bool TelemetryStore::Decode(const std::string& kind, const std::string& payload,
                     read(*diagnostics, "followingErrors", TelemetrySignal::FollowingError);
                     read(*diagnostics, "receivedPositions", TelemetrySignal::PlcPosition);
                     read(*diagnostics, "receivedSpeeds", TelemetrySignal::PlcSpeed);
+                    read(*diagnostics, "commandPositions", TelemetrySignal::CommandPosition);
+                    read(*diagnostics, "commandVelocities", TelemetrySignal::CommandVelocity);
+                    read(*diagnostics, "commandAccelerations", TelemetrySignal::CommandAcceleration);
                 }
                 // Legacy feedback retains its original identity in the raw packet;
                 // it is not relabelled as validated CMMT-AS telemetry.

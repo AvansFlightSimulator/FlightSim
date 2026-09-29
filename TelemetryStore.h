@@ -15,7 +15,7 @@
 // incoming and outgoing messages are not presented as simultaneous samples.
 enum class TelemetrySignal : std::size_t {
     PcPosition, PcSpeed, DriveTarget, DrivePosition, DriveVelocity, FollowingError,
-    PlcPosition, PlcSpeed, Count
+    PlcPosition, PlcSpeed, CommandPosition, CommandVelocity, CommandAcceleration, Count
 };
 constexpr std::size_t TelemetrySignalCount = static_cast<std::size_t>(TelemetrySignal::Count);
 struct TelemetryFrame {

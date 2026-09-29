@@ -9,14 +9,14 @@
 #include <sstream>
 
 namespace {
-void AddSocketError(DashboardModel* dashboard, const std::string& message, int errorCode) {
-    if (!dashboard) {
-        return;
+    void AddSocketError(DashboardModel* dashboard, const std::string& message, int errorCode) {
+        if (!dashboard) {
+            return;
+        }
+        std::ostringstream event;
+        event << message << " (Winsock " << errorCode << ')';
+        dashboard->AddEvent(event.str(), DashboardEventLevel::Error);
     }
-    std::ostringstream event;
-    event << message << " (Winsock " << errorCode << ')';
-    dashboard->AddEvent(event.str(), DashboardEventLevel::Error);
-}
 }
 
 TCPServer::TCPServer(const std::string& serverIp, int serverPort, DashboardModel* dashboard, TelemetryStore* telemetry)

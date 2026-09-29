@@ -8,9 +8,11 @@ namespace {
 const COLORREF Background = RGB(13, 20, 29);
 const COLORREF TextColor = RGB(234, 241, 247);
 const COLORREF Colors[] = { RGB(52,211,202), RGB(52,211,202), RGB(251,191,36),
-    RGB(73,150,255), RGB(73,150,255), RGB(248,113,113), RGB(195,132,252), RGB(195,132,252) };
+    RGB(73,150,255), RGB(73,150,255), RGB(248,113,113), RGB(195,132,252), RGB(195,132,252),
+    RGB(251,191,36), RGB(251,191,36), RGB(251,191,36) };
 const char* Names[] = { "PC sent position", "PC sent speed (magnitude)", "CMMT target",
-    "CMMT actual position", "CMMT actual velocity", "Following error", "PLC received position", "PLC received speed" };
+    "CMMT actual position", "CMMT actual velocity", "Following error", "PLC received position", "PLC received speed",
+    "PLC CSP command position", "PLC CSP velocity", "PLC CSP acceleration" };
 std::string Number(double value) {
     std::ostringstream stream;
     stream << std::fixed << std::setprecision(3) << value;
@@ -295,9 +297,15 @@ void DiagnosticsView::Paint() {
     Text(dc, 24, 158, "PC time on X axis. Native controller units; confirm scaling. N/A = unavailable. Click to inspect.");
     const int top = 190;
     const int height = (rect.bottom - top - 12 - (showDetails_ ? 150 : 0)) / 4;
-    Graph(dc, RECT{24, top, rect.right, top + height}, "POSITION (user units)", {0,3,6});
-    Graph(dc, RECT{24, top + height, rect.right, top + 2 * height}, "VELOCITY (user units/s)", {1,4,7});
-    Graph(dc, RECT{24, top + 2 * height, rect.right, top + 3 * height}, "DRIVE TARGET (raw 0x607A)", {2});
+    bool csp = false;
+    for (const auto& frame : frames_) {
+        if (std::isfinite(frame.values[static_cast<std::size_t>(TelemetrySignal::CommandPosition)][actuator_])) {
+            csp = true; break;
+        }
+    }
+    Graph(dc, RECT{24, top, rect.right, top + height}, "POSITION (user units)", csp ? std::vector<std::size_t>{0,3,8} : std::vector<std::size_t>{0,3,6});
+    Graph(dc, RECT{24, top + height, rect.right, top + 2 * height}, "VELOCITY (user units/s)", csp ? std::vector<std::size_t>{4,9} : std::vector<std::size_t>{1,4,7});
+    Graph(dc, RECT{24, top + 2 * height, rect.right, top + 3 * height}, csp ? "CSP ACCELERATION (mm/s^2)" : "DRIVE TARGET (raw 0x607A)", csp ? std::vector<std::size_t>{10} : std::vector<std::size_t>{2});
     Graph(dc, RECT{24, top + 3 * height, rect.right, top + 4 * height}, "FOLLOWING ERROR (raw)", {5});
     BitBlt(target, 0, 0, rect.right, rect.bottom, dc, 0, 0, SRCCOPY);
     SelectObject(dc, oldFont); SelectObject(dc, oldBitmap);
