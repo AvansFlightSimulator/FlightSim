@@ -16,13 +16,15 @@
 #endif
 
 class DashboardModel;
+class TelemetryStore;
 
 class TCPServer {
 public:
     explicit TCPServer(
         const std::string& serverIp,
         int serverPort,
-        DashboardModel* dashboard = nullptr);
+        DashboardModel* dashboard = nullptr,
+        TelemetryStore* telemetry = nullptr);
     ~TCPServer();
 
     TCPServer(const TCPServer&) = delete;
@@ -70,4 +72,6 @@ private:
     // Only the feedback worker accesses stream state and accepts clients.
     FeedbackStream feedbackStream_;
     DashboardModel* dashboard_ = nullptr;
+    TelemetryStore* telemetry_ = nullptr;
+    std::atomic<std::uint64_t> connectionId_{ 0 };
 };

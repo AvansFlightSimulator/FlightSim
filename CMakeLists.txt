@@ -20,6 +20,10 @@ add_executable(FlightSim
     DashboardModel.h
     HmiWindow.cpp
     HmiWindow.h
+    DiagnosticsView.cpp
+    DiagnosticsView.h
+    TelemetryStore.cpp
+    TelemetryStore.h
     ProtocolLogger.cpp
     ProtocolLogger.h
     SimConnectHandler.cpp
@@ -84,6 +88,10 @@ if(BUILD_TESTING)
     add_test(NAME simulator_input_filter_tests COMMAND simulator_input_filter_tests)
 
     if(NLOHMANN_JSON_INCLUDE_DIR)
+        add_executable(telemetry_store_tests TelemetryStore.cpp tests/telemetry_store_tests.cpp)
+        target_compile_features(telemetry_store_tests PRIVATE cxx_std_14)
+        target_include_directories(telemetry_store_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}" "${NLOHMANN_JSON_INCLUDE_DIR}")
+        add_test(NAME telemetry_store_tests COMMAND telemetry_store_tests)
         add_executable(motion_controller_tests
             MotionController.cpp
             SimulatorInputFilter.cpp

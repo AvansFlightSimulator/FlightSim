@@ -2,6 +2,7 @@
 
 #include "DashboardModel.h"
 #include "ProtocolLogger.h"
+#include "TelemetryStore.h"
 
 #include <Mstcpip.h>
 #include <iostream>
@@ -18,8 +19,8 @@ void AddSocketError(DashboardModel* dashboard, const std::string& message, int e
 }
 }
 
-TCPServer::TCPServer(const std::string& serverIp, int serverPort, DashboardModel* dashboard)
-    : serverSocket_(INVALID_SOCKET), clientSocket_(INVALID_SOCKET), dashboard_(dashboard) {
+TCPServer::TCPServer(const std::string& serverIp, int serverPort, DashboardModel* dashboard, TelemetryStore* telemetry)
+    : serverSocket_(INVALID_SOCKET), clientSocket_(INVALID_SOCKET), dashboard_(dashboard), telemetry_(telemetry) {
     WSADATA wsaData;
     if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) {
         std::cerr << "WSAStartup failed: " << WSAGetLastError() << std::endl;
@@ -129,6 +130,8 @@ bool TCPServer::startListening() {
     }
 
     feedbackStream_.Clear();
+    ++connectionId_;
+    if (telemetry_) telemetry_->Record("connect", "", connectionId_);
     enableKeepAlive(acceptedSocket, 20000, 1000);
     if (dashboard_) {
         dashboard_->SetClientConnected(true);
@@ -179,6 +182,7 @@ void TCPServer::enableKeepAlive(SOCKET socket, DWORD keepAliveTime, DWORD keepAl
 }
 
 bool TCPServer::sendData(const std::string& data) {
+    const auto connection = connectionId_.load();
     if (!connected_) {
         return false;
     }
@@ -221,6 +225,7 @@ bool TCPServer::sendData(const std::string& data) {
         return false;
     }
 
+    if (telemetry_) telemetry_->Record("send", data, connection);
     return true;
 }
 
@@ -268,6 +273,7 @@ void TCPServer::processMessage(const std::string& message) {
     ActuatorValues updatedPositions{};
     std::string error;
     if (!TryParseFeedback(message, updatedPositions, error)) {
+        if (telemetry_) telemetry_->Record("rejected-feedback", message, connectionId_);
         std::cerr << error << std::endl;
         if (dashboard_) {
             dashboard_->AddEvent(error, DashboardEventLevel::Warning);
@@ -290,6 +296,7 @@ void TCPServer::processMessage(const std::string& message) {
         }
     }
     LogProtocolMessage("RECV", message);
+    if (telemetry_) telemetry_->Record("feedback", message, connectionId_);
 }
 
 bool TCPServer::isConnected() const noexcept {
@@ -323,6 +330,7 @@ void TCPServer::closeClientConnection() {
             dashboard_->AddEvent("Controller disconnected", DashboardEventLevel::Warning);
         }
     }
+    if (wasConnected && telemetry_) telemetry_->Record("disconnect", "", connectionId_);
 
     if (socket != INVALID_SOCKET) {
         // Interrupt a blocking send/recv before waiting for the send lock.

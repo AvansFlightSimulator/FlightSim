@@ -142,6 +142,8 @@
     <ClCompile Include="calculate_legs.cpp" />
     <ClCompile Include="DashboardModel.cpp" />
     <ClCompile Include="HmiWindow.cpp" />
+    <ClCompile Include="DiagnosticsView.cpp" />
+    <ClCompile Include="TelemetryStore.cpp" />
     <ClCompile Include="main.cpp" />
     <ClCompile Include="ProtocolLogger.cpp" />
     <ClCompile Include="SimConnectHandler.cpp" />
@@ -157,6 +159,8 @@
     <ClInclude Include="calculate_legs.h" />
     <ClInclude Include="DashboardModel.h" />
     <ClInclude Include="HmiWindow.h" />
+    <ClInclude Include="DiagnosticsView.h" />
+    <ClInclude Include="TelemetryStore.h" />
     <ClInclude Include="ProtocolLogger.h" />
     <ClInclude Include="SimConnectHandler.h" />
     <ClInclude Include="TCPServer.h" />
