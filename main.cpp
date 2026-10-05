@@ -6,6 +6,7 @@
 #include "MotionController.h"
 #include "SimConnectHandler.h"
 #include "TCPServer.h"
+#include "TelemetryStore.h"
 
 #include <windows.h>
 
@@ -137,16 +138,25 @@ int main() {
     PrintStartupBanner();
 
     DashboardModel dashboard;
+    CreateDirectoryA("logs", nullptr);
+    CreateDirectoryA("logs/telemetry", nullptr);
+    SYSTEMTIME time{};
+    GetSystemTime(&time);
+    char sessionFile[180]{};
+    sprintf_s(sessionFile, "logs/telemetry/%04u%02u%02u-%02u%02u%02u-%03u-%lu.jsonl",
+        time.wYear, time.wMonth, time.wDay, time.wHour, time.wMinute, time.wSecond, time.wMilliseconds,
+        GetCurrentProcessId());
+    TelemetryStore telemetry(sessionFile);
     MotionController motion(dashboard);
     dashboard.AddEvent(std::string("Motion bridge started in ") + ACTIVE_TARGET_NAME + " mode");
 
-    HmiWindow hmi(dashboard, motion, ACTIVE_TARGET_NAME, ACTIVE_BIND_IP, ACTIVE_PORT);
+    HmiWindow hmi(dashboard, motion, telemetry, ACTIVE_TARGET_NAME, ACTIVE_BIND_IP, ACTIVE_PORT);
     if (!hmi.Create(GetModuleHandle(nullptr), SW_SHOWDEFAULT)) {
         std::cerr << "[HMI] Unable to create the dashboard window." << std::endl;
         return 1;
     }
 
-    TCPServer server(ACTIVE_BIND_IP, ACTIVE_PORT, &dashboard);
+    TCPServer server(ACTIVE_BIND_IP, ACTIVE_PORT, &dashboard, &telemetry);
     SimConnectHandler simulator(server, motion, &dashboard);
     std::atomic<bool> stopRequested{ false };
     // Blocking accept/receive and send use separate workers so the HMI and

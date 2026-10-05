@@ -64,7 +64,7 @@ bool MotionController::ExecuteActuatorInput(const ActuatorValues& positions) {
             || value > MotionSettings::MaximumActuatorInput) {
             return false;
         }
-        rounded[index] = std::round(value);
+        rounded[index] = USE_PLC_CSP ? value : std::round(value);
     }
     const auto snapshot = dashboard_.GetSnapshot();
     if (!snapshot.clientConnected || !snapshot.positionFeedback) {
@@ -157,7 +157,8 @@ void MotionController::ResetSimulatorInputFilter() noexcept {
 void MotionController::UpdateAttitude(const PlatformAttitude& attitude,
     bool hasFeedback, const ActuatorValues& currentPositions) {
     dashboard_.UpdateOrientation(attitude.pitchDegrees, attitude.rollDegrees, attitude.yawDegrees);
-    // Step limits are relative to measured actuator positions, never an assumed pose.
+    // Preserve the connection/feedback gate in every mode. PP/Unity step limits
+    // use this feedback; CSP sends final targets for the PLC trajectory planner.
     if (!hasFeedback) {
         return;
     }

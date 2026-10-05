@@ -17,16 +17,18 @@ constexpr float MaximumActuatorInput = 999.0f;
 double RadiansToDegrees(double radians);
 
 // MSFS pitch/bank arrive in radians; rudder deflection arrives in degrees.
-// Preserves the existing sign changes, halving, and +/-30-degree limits.
+// Preserves the existing sign changes, attitude scaling and +/-30-degree limits.
 PlatformAttitude CalculatePlatformAttitude(
     double pitchRadians, double bankRadians, double rudderDegrees);
 
 // Pure calculation: no sockets, simulator SDK, dashboard state, or side effects.
-// Call with the most recent controller feedback, not the previous command.
+// PP/Unity use the most recent feedback for step limits. CSP returns final
+// fractional endpoints and leaves trajectory generation to the PLC.
 MotionCommand CalculateMotion(
     const PlatformAttitude& attitude, const ActuatorValues& currentPositions);
 
-// Apply the same feedback-relative step/speed limits to explicit leg targets.
+// PP/Unity apply feedback-relative step/speed limits to explicit leg targets.
+// CSP passes the endpoints through with unused speeds set to zero.
 // This does not calculate platform orientation or validate physical reachability.
 MotionCommand CalculateActuatorMotion(
     const ActuatorValues& desiredPositions, const ActuatorValues& currentPositions);

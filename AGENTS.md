@@ -105,6 +105,17 @@ valid feedback. Unity retains its two modes and unchanged protocol.
 
 ## Working with the owner
 
+The owner confirmed that the CMMT-AS should own servo regulation, rather than
+implementing a replacement position-control loop on the PC or PLC. This is a
+desired control responsibility, not an implemented change. The current PC still
+recalculates position steps and speed magnitudes from measured position every
+50 ms in CalculateActuatorMotion. The supplied PLC uses MC_MoveAbsolute_Festo
+with ContinuousUpdate for these commands. The September 29 recording shows
+overshoot and repeated error-dependent speed changes; it does not establish that
+the drive's internal control loops are inactive or isolate the sole cause of the
+oscillation. Confirm active drive mode and motion-profile settings before changing
+this command-generation behavior.
+
 - Read this guide and `README.md` before making changes; inspect the relevant
   source for implementation details.
 - Ask before assuming missing goals, requirements, hardware specifications,
@@ -290,3 +301,20 @@ simulated unavailable SimConnect and did not operate physical hardware.
   `StuartClient.vcxproj`, and `StuartClient.vcxproj.filters` together.
 - Keep build outputs, logs, and local SDK configuration out of source changes.
 - Keep protocol and runtime documentation in `README.md` consistent with changes.
+# CSP implementation milestone
+
+The owner authorized a PLC trajectory layer using direct CiA402 CSP, without
+SoftMotion, in the existing PLC 2.1.0 project. C++ remains responsible for
+configurable filtering and inverse kinematics; CSP bypasses PC feedback-relative
+steps and preserves fractional desired positions. PP and Unity keep those
+legacy limits. BuildMode.h contains FLIGHTSIM_PLC_CONTROL_MODE (1 PP default,
+8 CSP) and MSFS_FILTER_TIME_CONSTANT_MS (120). Match the PLC CSP_Config selection.
+
+PLC CSP sources and commissioning notes live with the 2.1.0 project. Planning
+uses six monotone bounded quintic curves with a common duration; infeasible
+retargets brake before reversing. No controller can prevent crossing every
+arbitrarily retargeted point while also obeying finite acceleration/jerk limits.
+The drive retains servo regulation. CSP commissioning is initially disabled;
+PDO mapping, timing, units and hardware behavior still require commissioning.
+Mode selection is offline configuration, not a runtime UI switch. No automated
+tests or test infrastructure are to be added for this request.

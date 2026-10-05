@@ -65,6 +65,15 @@ std::string BuildUnityPayload(const MotionCommand& command) {
 
 std::string BuildCommandPayload(const MotionCommand& command) {
 #ifdef TARGET_PLC
+    if (USE_PLC_CSP) {
+        // An explicit discriminator prevents a CSP endpoint from being mistaken
+        // for a legacy PP feedback-relative step. Do not round away small motion.
+        nlohmann::json payload;
+        payload["controlMode"] = CONTROL_MODE_CSP;
+        payload["positions"] = command.positions;
+        payload["speeds"] = command.speeds;
+        return payload.dump();
+    }
     return BuildPlcPayload(command, PLC_VALUES_ARE_STRINGS);
 #else
     return BuildUnityPayload(command);

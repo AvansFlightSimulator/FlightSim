@@ -236,11 +236,13 @@ COLORREF EventColor(DashboardEventLevel level) {
 HmiWindow::HmiWindow(
     DashboardModel& model,
     MotionController& motion,
+    TelemetryStore& telemetry,
     const std::string& targetName,
     const std::string& bindIp,
     int port)
     : model_(model),
       motion_(motion),
+      diagnostics_(telemetry),
       targetName_(targetName),
       endpoint_(bindIp + ':' + std::to_string(port)) {
 }
@@ -293,6 +295,10 @@ bool HmiWindow::Create(HINSTANCE instance, int showCommand) {
         DestroyWindow(window_);
         return false;
     }
+    diagnosticsButton_ = CreateWindowW(L"BUTTON", L"Diagnostics", WS_CHILD | WS_VISIBLE | WS_TABSTOP,
+        750, 22, 140, 30, window_, reinterpret_cast<HMENU>(120), instance, nullptr);
+    SendMessage(diagnosticsButton_, WM_SETFONT, reinterpret_cast<WPARAM>(bodyFont_), TRUE);
+    if (!diagnosticsButton_ || !diagnostics_.Create(window_, instance)) return false;
     ShowWindow(window_, showCommand);
     UpdateWindow(window_);
     SetTimer(window_, RefreshTimerId, RefreshIntervalMilliseconds, nullptr);
@@ -438,6 +444,7 @@ bool HmiWindow::ProcessControlMessage(MSG& message) {
 }
 
 void HmiWindow::RefreshControls() {
+    if (diagnosticsVisible_) return;
     const auto snapshot = model_.GetSnapshot();
     const bool manualMode = snapshot.inputMode != InputMode::Simulator;
     const bool positionMode = snapshot.inputMode == InputMode::ActuatorPositions;
@@ -563,6 +570,19 @@ LRESULT HmiWindow::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
         return reinterpret_cast<LRESULT>(enabled ? fieldBrush_ : disabledFieldBrush_);
     }
     case WM_COMMAND:
+        if (LOWORD(wParam) == 120 && HIWORD(wParam) == BN_CLICKED) {
+            diagnosticsVisible_ = !diagnosticsVisible_;
+            ShowWindow(sourceControl_, diagnosticsVisible_ ? SW_HIDE : SW_SHOW);
+            ShowWindow(executeControl_, diagnosticsVisible_ ? SW_HIDE : SW_SHOW);
+            for (auto control : angleControls_) ShowWindow(control, SW_HIDE);
+            for (auto control : positionControls_) ShowWindow(control, SW_HIDE);
+            RECT rect{}; GetClientRect(window_, &rect);
+            diagnostics_.Show(diagnosticsVisible_, rect.right, rect.bottom);
+            SetWindowTextW(diagnosticsButton_, diagnosticsVisible_ ? L"Dashboard" : L"Diagnostics");
+            RefreshControls();
+            InvalidateRect(window_, nullptr, FALSE);
+            return 0;
+        }
         if (LOWORD(wParam) == SourceControlId && HIWORD(wParam) == CBN_SELCHANGE) {
             const auto selection = SendMessage(sourceControl_, CB_GETCURSEL, 0, 0);
             if (selection >= 0 && selection <= 2) {
@@ -643,6 +663,7 @@ LRESULT HmiWindow::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
         return 0;
     }
     case WM_SIZE:
+        diagnostics_.Resize(LOWORD(lParam), HIWORD(lParam));
         diagramBounds_ = RECT{};
         InvalidateRect(window_, nullptr, FALSE);
         return 0;

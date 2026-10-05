@@ -1,6 +1,7 @@
 #pragma once
 
 #include "BridgeTypes.h"
+#include "BuildMode.h"
 
 #include <chrono>
 
@@ -8,7 +9,7 @@ namespace SimulatorFilterSettings {
 // The output reaches about 63% of a step after one time constant. At the
 // nominal 20 Hz update rate, 120 ms gives useful noise rejection while still
 // responding to deliberate motion within a few control cycles.
-constexpr auto TimeConstant = std::chrono::milliseconds(120);
+constexpr auto TimeConstant = std::chrono::milliseconds(MSFS_FILTER_TIME_CONSTANT_MS);
 }
 
 // Smooths raw live-MSFS angles before the existing motion mapping and geometry.

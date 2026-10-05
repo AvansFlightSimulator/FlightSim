@@ -7,6 +7,7 @@
 #include <windows.h>
 
 #include <string>
+#include "DiagnosticsView.h"
 
 class DashboardModel;
 class MotionController;
@@ -17,6 +18,7 @@ public:
     HmiWindow(
         DashboardModel& model,
         MotionController& motion,
+        TelemetryStore& telemetry,
         const std::string& targetName,
         const std::string& bindIp,
         int port);
@@ -46,6 +48,9 @@ private:
 
     DashboardModel& model_;
     MotionController& motion_;
+    DiagnosticsView diagnostics_;
+    HWND diagnosticsButton_ = nullptr;
+    bool diagnosticsVisible_ = false;
     std::string targetName_;
     std::string endpoint_;
     HWND window_ = nullptr;
