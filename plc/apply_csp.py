@@ -53,12 +53,19 @@ for filename in sorted(os.listdir(source)):
     obj.textual_declaration.replace(decl.strip()); obj.textual_implementation.replace(impl.strip())
 
 main = [o for o in app.get_children(True) if o.get_name() == 'main' and o.has_textual_declaration][0]
-main.textual_implementation.replace('''// CSP uses the same operator start/stop and safety inputs, without PP homing.
+main.textual_declaration.replace(main.textual_declaration.text.replace('END_VAR', '    cspStartEdge : R_TRIG;\nEND_VAR', 1))
+main.textual_implementation.replace('''// CSP Reset parks all six axes; a later Start enables PC targets.
+cspStartEdge(CLK:=GVL.startButton OR GVL.startHMI);
 IF CSP_Config.ControlMode = CSP_Config.CONTROL_MODE_CSP THEN
-    IF GVL.resetButton OR GVL.resetHMI OR GVL.stopButton OR GVL.stopHMI THEN bEnabled := FALSE;
-    ELSIF GVL.startButton OR GVL.startHMI THEN bEnabled := TRUE; END_IF
+    IF NOT GVL.safetySystem OR CSP_Data.Fault OR NOT CSP_Data.ReadyToStart
+        OR GVL.resetButton OR GVL.resetHMI OR GVL.stopButton OR GVL.stopHMI THEN bEnabled := FALSE;
+    ELSIF cspStartEdge.Q THEN bEnabled := TRUE; END_IF
     CSP_Data.Enable := bEnabled AND GVL.safetySystem;
     CSP_Data.Reset := GVL.resetButton OR GVL.resetHMI;
+    CSP_Data.StopRequested := GVL.stopButton OR GVL.stopHMI;
+    GVL.lightRed := NOT GVL.safetySystem OR CSP_Data.Fault;
+    GVL.lightGreen := NOT GVL.lightRed AND CSP_Data.ReadyToStart AND NOT CSP_Data.ResetRequired;
+    GVL.lightYellow := NOT GVL.lightRed AND NOT GVL.lightGreen;
     FOR iCounter := 1 TO 6 DO
         GVL.currentPositions[iCounter].Number := LREAL_TO_REAL(CSP_Data.Axis[iCounter].ActualPosition);
         GVL.servoPositionsCurrent[iCounter] := LREAL_TO_REAL(CSP_Data.Axis[iCounter].ActualPosition);
@@ -112,6 +119,11 @@ for device in p.get_children(True):
                     key = (connector.connector_id, parameter.id, path)
                     if key in values and element.value != values[key]:
                         element.value = values[key]
+# Finish profile regeneration before setting DC periods. Setting them in the
+# same profile-update session can leave the slaves at the old 8 ms on save.
+p.save_as(sys.argv[2])
+p.close()
+p = projects.open(sys.argv[2])
 # Apply live parameter values via the device API (native XML also includes
 # descriptor defaults, which are not necessarily the stored user values).
 for device in p.get_children(True):
@@ -121,9 +133,9 @@ for device in p.get_children(True):
             for parameter in connector.host_parameters:
                 if parameter.id in [805326848, 1610633216, 1610764288]:
                     parameter.value = '4000'
-p.save_as(sys.argv[2])
+p.save()
 app = p.active_application
-config = objects['CSP_Config']
+config = [o for o in app.get_children(True) if o.get_name() == 'CSP_Config'][0]
 config_text = config.textual_declaration.text
 for mode in [8, 1]:
     config.textual_declaration.replace(config_text.replace('ControlMode : SINT := 1;', 'ControlMode : SINT := %d;' % mode))

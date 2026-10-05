@@ -165,6 +165,9 @@
     <ClInclude Include="SimConnectHandler.h" />
     <ClInclude Include="TCPServer.h" />
   </ItemGroup>
+  <ItemGroup>
+    <None Include=".github\copilot-instructions.md" />
+  </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
   </ImportGroup>

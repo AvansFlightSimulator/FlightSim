@@ -11,9 +11,9 @@ namespace {
     
     // Existing platform calibration. Confirm physical units and hardware limits with
     // the owner before tuning these values; this refactor does not recalibrate them.
-    constexpr double MaximumPitchDegrees = 30.0;
-    constexpr double MaximumRollDegrees = 30.0;
-    constexpr double MaximumYawDegrees = 30.0;
+    constexpr double MaximumPitchDegrees = 28.0;
+    constexpr double MaximumRollDegrees = 28.0;
+    constexpr double MaximumYawDegrees = 15.0;
     constexpr float SpeedLimit = 500.0f;
     constexpr float MinimumSpeed = 2.0f;
     constexpr float MaximumStepPerSecond = 400.0f;

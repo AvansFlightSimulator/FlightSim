@@ -209,8 +209,8 @@ unavailable in these runtime checks; no physical hardware was operated.
 See the [project wiki](https://gitlab.com/AvansInformatica/flight-simulator/flight-simulator/-/wikis/home) for additional information.
 # CSP control option (PLC 2.1.0)
 
-`BuildMode.h` now selects PP (`FLIGHTSIM_PLC_CONTROL_MODE=1`, default) or CSP
-(`=8`). Match the PLC's `CSP_Config.ControlMode`. CSP retains the existing
+`BuildMode.h` selects PP (`FLIGHTSIM_PLC_CONTROL_MODE=1`) or CSP
+(`=8`, currently selected). Match the PLC's `CSP_Config.ControlMode`. CSP retains the existing
 inverse kinematics and configurable pre-IK MSFS smoothing, but sends six
 fractional final actuator positions; the PLC creates the intermediate motion.
 PP and Unity retain the existing feedback-relative steps and speed magnitudes.
@@ -226,3 +226,11 @@ configuration and required manual EtherCAT commissioning, including cyclic
 The diagnostics page accepts PP version 1 and CSP version 2 feedback. CSP adds
 PLC command position, velocity and acceleration to recording/replay and graphs.
 PP/CSP selection is a configuration/build choice, not a live HMI switch.
+
+CSP operator sequence: startup requires **Reset**. Reset smoothly parks all six
+actuators at 200, using the existing encoder reference and PLC trajectory limits.
+After measured arrival and settling, **Start** enables PC targets. Holding Start
+during parking does not queue motion. Stop cancels parking and requires Reset
+again. The local park move does not require a PC connection. See CSP_Config for
+HomePosition (200), HomeTolerance (0.5), HomeSettleTime (200 ms), and HomeTimeout
+(60 s). This is a park move, not physical reference homing.
