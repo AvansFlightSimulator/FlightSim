@@ -307,14 +307,71 @@ The owner authorized a PLC trajectory layer using direct CiA402 CSP, without
 SoftMotion, in the existing PLC 2.1.0 project. C++ remains responsible for
 configurable filtering and inverse kinematics; CSP bypasses PC feedback-relative
 steps and preserves fractional desired positions. PP and Unity keep those
-legacy limits. BuildMode.h contains FLIGHTSIM_PLC_CONTROL_MODE (1 PP default,
-8 CSP) and MSFS_FILTER_TIME_CONSTANT_MS (120). Match the PLC CSP_Config selection.
+legacy limits. BuildMode.h contains FLIGHTSIM_PLC_CONTROL_MODE (1 PP,
+8 CSP currently selected) and MSFS_FILTER_TIME_CONSTANT_MS (120). Match the PLC CSP_Config selection.
 
-PLC CSP sources and commissioning notes live with the 2.1.0 project. Planning
-uses six monotone bounded quintic curves with a common duration; infeasible
-retargets brake before reversing. No controller can prevent crossing every
-arbitrarily retargeted point while also obeying finite acceleration/jerk limits.
+PLC CSP sources and commissioning notes live with the 2.1.0 project. The
+trajectory (CSP_Trajectory6 + CSP_StopOffset) is an online per-axis jerk-limited
+generator: every 4 ms cycle it picks one jerk from the current commanded P/V/A so
+that the full-limit stopping point meets the 20 Hz target (linearly interpolated
+over the packet interval), within jerk, acceleration, jerk-aware velocity and
+travel envelopes. Retargets and reversals are continuous; there is no
+brake-to-standstill between targets. Stop/timeout target the current stopping
+point. No controller can prevent crossing every arbitrarily retargeted point
+while also obeying finite acceleration/jerk limits.
 The drive retains servo regulation. CSP commissioning is initially disabled;
 PDO mapping, timing, units and hardware behavior still require commissioning.
 Mode selection is offline configuration, not a runtime UI switch. No automated
 tests or test infrastructure are to be added for this request.
+
+October 5 startup repair targets the owner's `build/csp-inspection/final.project`,
+which already selects CSP and has Commissioned TRUE. Preserve its edited main
+operator logic. Festo rPositionFactor is user units per raw count in its saved
+readback: multiply raw feedback, divide user-unit output. Do not multiply both
+directions. The saved slave DC periods were 8 ms against a 4 ms master/task;
+the repair aligns them to 4 ms. CSP_Data.StartupBlockReason and per-axis
+ReadinessCode expose startup gates in CODESYS. Offline compilation does not
+establish drive startup or hardware operation.
+
+A subsequent hardware report showed FaultCode 1 / TransitionState 20. Timeout
+recovery now resets the TON during a latched fault and accepted Reset, with a
+fresh timeout per transition stage. TimeoutState/TimeoutStatusword and
+TimeoutControlword snapshot the original timeout before quick stop changes
+live feedback. The initial drive transition failure still needs these hardware
+values if it recurs; do not claim the timer fix proves hardware startup.
+
+The owner subsequently requires Reset -> all six actuators at 200 -> a new
+Start before normal operation. CSP now defaults to ResetRequired, performs a
+local jerk-limited park move on Reset (braking first if already moving), verifies
+measured arrival/standstill, then exposes ReadyToStart. PC targets cannot drive
+parking. Start is edge-triggered for CSP so a held button does not queue motion.
+Stop during parking requires another Reset; normal Stop after parking preserves
+readiness. This positions against the existing encoder reference, without
+changing calibration or invoking mode-6 reference homing. HomePosition=200,
+HomeTolerance=0.5, HomeSettleTime=200 ms, HomeTimeout=60 s are configuration values;
+physical validation remains outstanding. PP operation remains unchanged.
+
+CSP reset/fault recovery now latches the CSP-task reset edge until accepted.
+A three-phase handshake establishes bit 7 low, pulses 0x0080 only on faulted
+axes, then lowers bit 7 and waits for later statuswords without Fault or Fault
+Reaction Active before clearing the PLC fault and restarting park. Existing
+standstill/safety/readiness/disabled/Stop/commissioning gates remain in force.
+A persistent drive fault leaves the request latched; reset pulses do not repeat
+automatically. No inter-task one-cycle acknowledgment was introduced.
+
+Superseding owner decision (October 5): **PP for startup and Reset, CSP only for
+runtime motion**; the operator uses only Reset then Start. With ControlMode 8,
+main calls PlatformStartup, which runs the original PP reset/start/neutral move
+(PC targets suppressed), then publishes PPReleased once all six PP moves are Done
+and the platform is stationary. CSP_Cycle captures ActualRaw into the CSP targets
+and takes OwnsOutputs in the same EtherCAT cycle, holds those targets while all six
+drives confirm mode 8 (state 60, no disable/re-enable, no state 20), then accepts
+new PC targets. Reset under CSP brakes, restores mode 1 on all six (states 70/71),
+sets CSPReleased, and PP resumes with its original doReset(). The earlier CSP park
+move and CSP fault-reset pulse are no longer reached. Sources/notes are in
+FlightSimPLC/2.1.0/CSP; the compiled project is
+build/csp-inspection/handover2/pp-csp-handover-v4.project (from final.project).
+PP completion is level-based (PP STARTED, isReady, at 200 +/- HomeTolerance,
+stationary), not the transient MC_MoveAbsolute.Done output.
+Only offline compilation is verified; CMMT mode switching in operation and PP
+block resumption after CSP ownership need hardware validation.
