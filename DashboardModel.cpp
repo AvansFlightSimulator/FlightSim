@@ -7,8 +7,7 @@ namespace {
 
 // Initialize startTime_ to now (steady clock). 
 DashboardModel::DashboardModel()
-    : startTime_(std::chrono::steady_clock::now()) {
-}
+    : startTime_(std::chrono::steady_clock::now()) {}
 
 // Switch input mode and reset all input/motion availability and targets.
 void DashboardModel::SetInputMode(InputMode mode) {

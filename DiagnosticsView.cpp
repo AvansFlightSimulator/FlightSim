@@ -5,23 +5,69 @@
 #include <sstream>
 
 namespace {
-const COLORREF Background = RGB(13, 20, 29);
-const COLORREF TextColor = RGB(234, 241, 247);
-const COLORREF Colors[] = { RGB(52,211,202), RGB(52,211,202), RGB(251,191,36),
-    RGB(73,150,255), RGB(73,150,255), RGB(248,113,113), RGB(195,132,252), RGB(195,132,252),
-    RGB(251,191,36), RGB(251,191,36), RGB(251,191,36) };
-const char* Names[] = { "PC sent position", "PC sent speed (magnitude)", "CMMT target",
-    "CMMT actual position", "CMMT actual velocity", "Following error", "PLC received position", "PLC received speed",
-    "PLC CSP command position", "PLC CSP velocity", "PLC CSP acceleration" };
-std::string Number(double value) {
-    std::ostringstream stream;
-    stream << std::fixed << std::setprecision(3) << value;
-    return stream.str();
-}
-void Text(HDC dc, int x, int y, const std::string& text, COLORREF color = TextColor) {
-    SetTextColor(dc, color);
-    TextOutA(dc, x, y, text.c_str(), static_cast<int>(text.size()));
-}
+
+    namespace {
+
+        /**
+         * Colors and labels used by the diagnostics view.
+         *
+         * These constants live in an anonymous namespace to keep them translation-unit local.
+         */
+
+         /** Background color for the diagnostics display (RGB). */
+        const COLORREF Background = RGB(13, 20, 29);
+
+        /** Default text color used when drawing labels and values. */
+        const COLORREF TextColor = RGB(234, 241, 247);
+
+        /**
+         * Palette of colors used to draw individual traces/lines in the diagnostics graph.
+         * The index into this array corresponds to the same index in `Names`.
+         */
+        const COLORREF Colors[] = {
+            RGB(52,211,202), RGB(52,211,202), RGB(251,191,36),
+            RGB(73,150,255), RGB(73,150,255), RGB(248,113,113), RGB(195,132,252), RGB(195,132,252),
+            RGB(251,191,36), RGB(251,191,36), RGB(251,191,36)
+        };
+
+        /**
+         * Human-readable labels for each telemetry trace shown in the diagnostics view.
+         * These must remain in sync with the entries/indices expected elsewhere in the view.
+         */
+        const char* Names[] = {
+            "PC sent position", "PC sent speed (magnitude)", "CMMT target",
+            "CMMT actual position", "CMMT actual velocity", "Following error", "PLC received position", "PLC received speed",
+            "PLC CSP command position", "PLC CSP velocity", "PLC CSP acceleration"
+        };
+
+        /**
+         * Convert a floating-point value to a string using fixed notation with three
+         * decimal places (e.g., 12.345).
+         *
+         * @param value The double value to format.
+         * @return A std::string containing the formatted number.
+         */
+        std::string Number(double value) {
+            std::ostringstream stream;
+            stream << std::fixed << std::setprecision(3) << value;
+            return stream.str();
+        }
+
+        /**
+         * Draw an ASCII text string onto the provided device context at the given
+         * coordinates using the supplied color (defaults to TextColor).
+         *
+         * @param dc    Device context handle to draw into.
+         * @param x     X coordinate in device units.
+         * @param y     Y coordinate in device units.
+         * @param text  The text to draw.
+         * @param color Optional COLORREF to use for the text; defaults to TextColor.
+         */
+        void Text(HDC dc, int x, int y, const std::string& text, COLORREF color = TextColor) {
+            SetTextColor(dc, color);
+            TextOutA(dc, x, y, text.c_str(), static_cast<int>(text.size()));
+        }
+    }
 }
 
 bool DiagnosticsView::Create(HWND parent, HINSTANCE instance) {
