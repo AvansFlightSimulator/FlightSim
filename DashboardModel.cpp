@@ -1,13 +1,15 @@
 #include "DashboardModel.h"
 
 namespace {
-constexpr std::size_t MaximumDashboardEvents = 80;
+    // Max number of events kept in the dashboard log.
+    constexpr std::size_t MaximumDashboardEvents = 80;
 }
 
+// Initialize startTime_ to now (steady clock). 
 DashboardModel::DashboardModel()
-    : startTime_(std::chrono::steady_clock::now()) {
-}
+    : startTime_(std::chrono::steady_clock::now()) {}
 
+// Switch input mode and reset all input/motion availability and targets.
 void DashboardModel::SetInputMode(InputMode mode) {
     std::lock_guard<std::mutex> lock(mutex_);
     state_.inputMode = mode;
@@ -19,12 +21,14 @@ void DashboardModel::SetInputMode(InputMode mode) {
     state_.speeds = {};
 }
 
+// Store requested actuator positions and mark them available.
 void DashboardModel::SetActuatorInput(const ActuatorValues& positions) {
     std::lock_guard<std::mutex> lock(mutex_);
     state_.requestedPositions = positions;
     state_.actuatorInputAvailable = true;
 }
 
+// Update actuator targets and speeds (no orientation data).
 void DashboardModel::UpdateActuatorMotion(const ActuatorValues& positions, const ActuatorValues& speeds) {
     std::lock_guard<std::mutex> lock(mutex_);
     state_.targetPositions = positions;
@@ -33,12 +37,14 @@ void DashboardModel::UpdateActuatorMotion(const ActuatorValues& positions, const
     state_.motionAvailable = false;
 }
 
+// Store manual simulator input and mark it available.
 void DashboardModel::SetManualInput(const SimulatorInput& input) {
     std::lock_guard<std::mutex> lock(mutex_);
     state_.manualInput = input;
     state_.manualInputAvailable = true;
 }
 
+// Set simulator connection; clear simulator data on disconnect.
 void DashboardModel::SetSimulatorConnected(bool connected) {
     std::lock_guard<std::mutex> lock(mutex_);
     state_.simulatorConnected = connected;
@@ -48,11 +54,13 @@ void DashboardModel::SetSimulatorConnected(bool connected) {
     }
 }
 
+// Set whether the TCP server is listening.
 void DashboardModel::SetTcpListening(bool listening) {
     std::lock_guard<std::mutex> lock(mutex_);
     state_.tcpListening = listening;
 }
 
+// Set client connection; clear position feedback on disconnect.
 void DashboardModel::SetClientConnected(bool connected) {
     std::lock_guard<std::mutex> lock(mutex_);
     state_.clientConnected = connected;
@@ -61,6 +69,7 @@ void DashboardModel::SetClientConnected(bool connected) {
     }
 }
 
+// Store actuator feedback, count the message, and timestamp it.
 void DashboardModel::UpdateFeedback(const ActuatorValues& positions) {
     std::lock_guard<std::mutex> lock(mutex_);
     state_.currentPositions = positions;
@@ -69,6 +78,7 @@ void DashboardModel::UpdateFeedback(const ActuatorValues& positions) {
     state_.lastFeedbackMilliseconds = ElapsedMilliseconds();
 }
 
+// Store simulator pitch/roll and mark attitude available.
 void DashboardModel::UpdateSimulatorAttitude(double pitchDegrees, double rollDegrees) {
     std::lock_guard<std::mutex> lock(mutex_);
     state_.simulatorPitchDegrees = pitchDegrees;
@@ -76,12 +86,14 @@ void DashboardModel::UpdateSimulatorAttitude(double pitchDegrees, double rollDeg
     state_.simulatorAttitudeAvailable = true;
 }
 
+// Store simulator rudder angle and mark it available.
 void DashboardModel::UpdateSimulatorRudder(double rudderDegrees) {
     std::lock_guard<std::mutex> lock(mutex_);
     state_.simulatorRudderDegrees = rudderDegrees;
     state_.simulatorRudderAvailable = true;
 }
 
+// Update platform orientation (pitch/roll/yaw) only.
 void DashboardModel::UpdateOrientation(
     double pitchDegrees,
     double rollDegrees,
@@ -93,6 +105,7 @@ void DashboardModel::UpdateOrientation(
     state_.motionAvailable = true;
 }
 
+// Update orientation plus actuator targets and speeds together.
 void DashboardModel::UpdateMotion(
     double pitchDegrees,
     double rollDegrees,
@@ -109,12 +122,14 @@ void DashboardModel::UpdateMotion(
     state_.motionAvailable = true;
 }
 
+// Count a sent command and timestamp it.
 void DashboardModel::RecordCommandSent() {
     std::lock_guard<std::mutex> lock(mutex_);
     ++state_.sentMessages;
     state_.lastSendMilliseconds = ElapsedMilliseconds();
 }
 
+// Append a timestamped event; drop oldest beyond the limit.
 void DashboardModel::AddEvent(const std::string& message, DashboardEventLevel level) {
     std::lock_guard<std::mutex> lock(mutex_);
     events_.push_back({ ElapsedMilliseconds(), level, message });
@@ -123,6 +138,7 @@ void DashboardModel::AddEvent(const std::string& message, DashboardEventLevel le
     }
 }
 
+// Return a thread-safe copy of the current state and events.
 DashboardSnapshot DashboardModel::GetSnapshot() const {
     std::lock_guard<std::mutex> lock(mutex_);
     DashboardSnapshot snapshot = state_;
@@ -131,6 +147,7 @@ DashboardSnapshot DashboardModel::GetSnapshot() const {
     return snapshot;
 }
 
+// Milliseconds elapsed since construction.
 long long DashboardModel::ElapsedMilliseconds() const {
     return std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::steady_clock::now() - startTime_).count();
