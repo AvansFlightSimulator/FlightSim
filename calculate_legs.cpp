@@ -21,7 +21,7 @@ namespace {
 * vector objects to be added using the + operator syntax.
 * 
 * Other The vector to be added to this vector. Passed as a const reference
-*              to avoid unnecessary copying.
+* to avoid unnecessary copying.
 * 
 * A new vec object containing the sum of both vectors where:
 *         - result.x = this->x + other.x
@@ -66,14 +66,14 @@ float vec::magnitude() const {
 * rotations, scaling, or general linear transformations.
 *
 * matrix A constant reference to a 3x3 matrix represented as std::array<std::array<float, 3>, 3>.
-*               The matrix is indexed as matrix[row][column].
+* The matrix is indexed as matrix[row][column].
 * v A constant reference to the 3D vector to be transformed, containing x, y, and z components.
 *
 * A new vec object containing the result of the matrix-vector multiplication.
 *
 * This function assumes both the matrix and vector are properly initialized.
-*       The operation is computed as: result = matrix * v, where each component of the result
-*       is the dot product of the corresponding row with the input vector.
+* The operation is computed as: result = matrix * v, where each component of the result
+* is the dot product of the corresponding row with the input vector.
 */
 vec dot_product(const std::array<std::array<float, 3>, 3>& matrix, const vec& v) {
     vec result;
@@ -161,25 +161,25 @@ vec compute_li_vector(const vec& T, float psi, float theta, float phi, const vec
  * locations of both attachment points. The result represents the extended or contracted
  * length of the actuator connecting these two points.
  *
- * @param T The translation vector of the platform relative to the base coordinate system.
- * @param psi The yaw angle (rotation about Z-axis) in degrees.
- * @param theta The pitch angle (rotation about Y-axis) in degrees.
- * @param phi The roll angle (rotation about X-axis) in degrees.
- * @param p_i The coordinates of mounting point i on the platform in platform-local coordinates.
- * @param b_i The coordinates of mounting point i on the base in base-fixed coordinates.
+ * T The translation vector of the platform relative to the base coordinate system.
+ * psi The yaw angle (rotation about Z-axis) in degrees.
+ * theta The pitch angle (rotation about Y-axis) in degrees.
+ * phi The roll angle (rotation about X-axis) in degrees.
+ * p_i The coordinates of mounting point i on the platform in platform-local coordinates.
+ * b_i The coordinates of mounting point i on the base in base-fixed coordinates.
  *
- * @return float The length of actuator i, calculated as the magnitude of the vector from
- *               the base mounting point to the platform mounting point.
+ * float The length of actuator i, calculated as the magnitude of the vector from
+ * the base mounting point to the platform mounting point.
  *
  * The computation internally calls compute_li_vector() to obtain the displacement vector
  * l_i and returns its magnitude. The function follows the formula:
- *     length = |l_i| = |T + R * p_i - b_i|
+ * length = |l_i| = |T + R * p_i - b_i|
  * where R is the rotation matrix derived from the Euler angles (psi, theta, phi).
  *
- * @see compute_li_vector() For details on l_i vector calculation
- * @see rotation_matrix() For Euler angle rotation matrix computation
+ * compute_li_vector() For details on l_i vector calculation
+ * rotation_matrix() For Euler angle rotation matrix computation
  *
- * @note Angles are provided in degrees and internally converted to radians.
+ * Angles are provided in degrees and internally converted to radians.
  */
 float compute_li_length(const vec& T, float psi, float theta, float phi, const vec& p_i, const vec& b_i) {
     vec l_i = compute_li_vector(T, psi, theta, phi, p_i, b_i);
