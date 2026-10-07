@@ -2,12 +2,14 @@
 
 #include <cmath>
 
+// Store the filter time constant in seconds.
 SimulatorInputFilter::SimulatorInputFilter(std::chrono::duration<double> timeConstant)
-    : timeConstantSeconds_(timeConstant.count()) {
-}
+    : timeConstantSeconds_(timeConstant.count()) {}
 
+// Low-pass filter a new sample; writes the result to output. False if input is invalid.
 bool SimulatorInputFilter::Update(
     const SimulatorInput& input, Clock::time_point timestamp, SimulatorInput& output) {
+    // Reject NaN/infinite values.
     if (!std::isfinite(input.pitchDegrees) || !std::isfinite(input.rollDegrees)
         || !std::isfinite(input.rudderDegrees)) {
         return false;
@@ -22,6 +24,7 @@ bool SimulatorInputFilter::Update(
         return true;
     }
 
+    // No time has passed (or clock went back): keep the current value.
     const double elapsedSeconds = std::chrono::duration<double>(timestamp - lastUpdate_).count();
     if (elapsedSeconds <= 0.0) {
         output = filtered_;
@@ -29,6 +32,7 @@ bool SimulatorInputFilter::Update(
     }
 
     lastUpdate_ = timestamp;
+    // Time-based smoothing factor; a time constant of 0 or less disables filtering.
     const double alpha = timeConstantSeconds_ <= 0.0
         ? 1.0
         : 1.0 - std::exp(-elapsedSeconds / timeConstantSeconds_);
@@ -39,12 +43,14 @@ bool SimulatorInputFilter::Update(
     return true;
 }
 
+// Clear filter state so the next sample is used as-is.
 void SimulatorInputFilter::Reset() noexcept {
     initialized_ = false;
     filtered_ = {};
     lastUpdate_ = {};
 }
 
+// Move the filtered value toward the input by fraction alpha.
 double SimulatorInputFilter::FilterValue(double input, double filtered, double alpha) const noexcept {
     return filtered + alpha * (input - filtered);
 }

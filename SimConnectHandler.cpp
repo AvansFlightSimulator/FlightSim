@@ -31,8 +31,7 @@ SimConnectHandler::SimConnectHandler(TCPServer& server, MotionController& motion
     : server_(server),
     motion_(motion),
     dashboard_(dashboard),
-    nextCalculation_(std::chrono::steady_clock::now()) {
-}
+    nextCalculation_(std::chrono::steady_clock::now()) {}
 
 // Close the SimConnect session on destruction.
 SimConnectHandler::~SimConnectHandler() {
